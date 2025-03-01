@@ -1,12 +1,214 @@
-// content-script.js
-// 코어 기능 구현: 1~5번 항목 + Gemini API 번역 기능
+/**
+ * XPath로 요소 찾기
+ */
+function getElementByXPath(xpath) {
+  try {
+    return document.evaluate(
+      xpath, 
+      document, 
+      null, 
+      XPathResult.FIRST_ORDERED_NODE_TYPE, 
+      null
+    ).singleNodeValue;
+  } catch (e) {
+    console.error('[번역 익스텐션] XPath 평가 오류:', e, xpath);
+    return null;
+  }
+}
 
-// 설정값 (실제 환경에서는 storage API로 관리)
+/**
+ * 번역 상태 UI 생성 및 표시
+ */
+function showTranslationStatus(message, isComplete = false) {
+  let statusElement = document.getElementById('translation-status-bar');
+  
+  if (!statusElement) {
+    statusElement = document.createElement('div');
+    statusElement.id = 'translation-status-bar';
+    
+    // 스타일 설정
+    Object.assign(statusElement.style, {
+      position: 'fixed',
+      bottom: '20px',
+      right: '20px',
+      padding: '10px 15px',
+      background: isComplete ? '#4CAF50' : '#2196F3',
+      color: 'white',
+      borderRadius: '5px',
+      boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+      zIndex: '9999',
+      fontSize: '14px',
+      fontFamily: 'Arial, sans-serif',
+      transition: 'all 0.3s ease'
+    });
+    
+    document.body.appendChild(statusElement);
+  } else {
+    // 완료 상태일 경우 색상 변경
+    if (isComplete) {
+      statusElement.style.background = '#4CAF50';
+    } else {
+      statusElement.style.background = '#2196F3';
+    }
+  }
+  
+  statusElement.textContent = message;
+}
+
+/**
+ * 번역 상태 UI 숨기기
+ */
+function hideTranslationStatus() {
+  const statusElement = document.getElementById('translation-status-bar');
+  if (statusElement) {
+    // 애니메이션 후 제거
+    statusElement.style.opacity = '0';
+    setTimeout(() => {
+      if (statusElement.parentNode) {
+        statusElement.parentNode.removeChild(statusElement);
+      }
+    }, 300);
+  }
+}
+
+// 페이지 로드 완료 시 자동 번역 옵션 (설정에 따라 활성화)
+document.addEventListener('DOMContentLoaded', () => {
+  // chrome.storage.sync.get('settings', (data) => {
+  //   if (data.settings && data.settings.autoTranslate) {
+  //     translatePage();
+  //   }
+  // });
+  
+  // 주기적으로 오래된 캐시 정리 (옵션)
+  // setTimeout(() => TranslationCache.cleanupExpired(), 10000);
+});
+// content-script.js
+// 최적화된 번역 익스텐션 (캐싱, 스크롤 감지, 최적 배치)
+
+// 설정값
 const SETTINGS = {
   apiKey: '123123', // Gemini API 키 (임시값)
-  targetLang: 'ko', // 대상 언어 (한국어)
-  batchSize: 5,     // 한 번에 처리할 텍스트 배치 크기
-  maxConcurrent: 3  // 최대 동시 요청 수
+  apiModel: 'gemini-1.5-flash', // Gemini 모델명
+  apiEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash', // API 엔드포인트
+  targetLang: 'ko',  // 대상 언어 (한국어)
+  minTextLength: 2,  // 번역할 최소 텍스트 길이
+  cacheExpiry: 30,   // 캐시 만료일 (일)
+  batchSize: 40,     // Gemini 1.5 Flash의 토큰 한계에 맞춘 최적 배치 크기
+  maxConcurrentBatches: 3, // 최대 동시 배치 처리 수
+  scrollThreshold: 200 // 스크롤 감지 임계값 (픽셀)
+};
+
+// 번역 상태 관리
+const TranslationState = {
+  isTranslating: false,
+  processedNodes: new WeakSet(), // 이미 처리된 노드 추적
+  pendingTranslation: [],        // 번역 대기 중인 노드
+  visibleNodes: [],              // 현재 화면에 보이는 노드
+  lastScrollPosition: 0,         // 마지막 스크롤 위치
+  scrollTimer: null,             // 스크롤 타이머
+  
+  // 번역 상태 초기화
+  reset() {
+    this.isTranslating = false;
+    this.pendingTranslation = [];
+    this.visibleNodes = [];
+  }
+};
+
+// 번역 캐시 관리 객체
+const TranslationCache = {
+  // 캐시에서 번역 가져오기
+  async get(text, targetLang) {
+    const key = this._getCacheKey(text, targetLang);
+    
+    try {
+      const data = await new Promise((resolve) => {
+        chrome.storage.local.get(key, (result) => {
+          resolve(result[key]);
+        });
+      });
+      
+      if (!data) return null;
+      
+      // 만료 시간 확인
+      if (data.timestamp && Date.now() - data.timestamp > SETTINGS.cacheExpiry * 24 * 60 * 60 * 1000) {
+        this.remove(text, targetLang);
+        return null;
+      }
+      
+      console.log(`[번역 익스텐션] 캐시에서 번역 불러옴: ${text.substring(0, 20)}...`);
+      return data.translation;
+    } catch (e) {
+      console.error("캐시 읽기 오류:", e);
+      return null;
+    }
+  },
+  
+  // 번역 결과를 캐시에 저장
+  set(text, translation, targetLang) {
+    const key = this._getCacheKey(text, targetLang);
+    const data = {
+      translation,
+      timestamp: Date.now() // 현재 시간 기록
+    };
+    
+    chrome.storage.local.set({ [key]: data });
+  },
+  
+  // 캐시에서 번역 제거
+  remove(text, targetLang) {
+    const key = this._getCacheKey(text, targetLang);
+    chrome.storage.local.remove(key);
+  },
+  
+  // 캐시 검색 키 생성
+  _getCacheKey(text, targetLang) {
+    // 텍스트에서 공백 제거하고 해시 생성 (단순화된 해싱)
+    const simpleHash = text
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, '')
+      .split('')
+      .reduce((hash, char) => ((hash << 5) - hash) + char.charCodeAt(0), 0)
+      .toString(36);
+    
+    return `translate_${targetLang}_${simpleHash}`;
+  },
+  
+  // 캐시 통계 가져오기
+  async getStats() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(null, (items) => {
+        const cacheKeys = Object.keys(items).filter(key => key.startsWith('translate_'));
+        resolve({
+          count: cacheKeys.length,
+          size: JSON.stringify(items).length
+        });
+      });
+    });
+  },
+  
+  // 오래된 캐시 정리
+  async cleanupExpired() {
+    const now = Date.now();
+    const expiryTime = SETTINGS.cacheExpiry * 24 * 60 * 60 * 1000;
+    
+    return new Promise((resolve) => {
+      chrome.storage.local.get(null, (items) => {
+        const expiredKeys = Object.keys(items)
+          .filter(key => key.startsWith('translate_') && items[key].timestamp && (now - items[key].timestamp > expiryTime));
+        
+        if (expiredKeys.length > 0) {
+          chrome.storage.local.remove(expiredKeys, () => {
+            console.log(`[번역 익스텐션] ${expiredKeys.length}개의 만료된 캐시 항목 삭제`);
+            resolve(expiredKeys.length);
+          });
+        } else {
+          resolve(0);
+        }
+      });
+    });
+  }
 };
 
 // 백그라운드 스크립트로부터 메시지 수신
@@ -23,127 +225,328 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 /**
- * 1. 웹페이지 전체를 가져와 번역 프로세스 시작
- * 2. 자연어 텍스트만 추출
- * 3. 리스트에 [원본텍스트, 번역될 텍스트, 위치정보] 저장
- * 4. Gemini API로 번역 요청
- * 5. 번역된 텍스트를 DOM에 적용
+ * 웹페이지 번역 프로세스 - 최적화 버전
  */
 async function translatePage() {
   console.log("[번역 익스텐션] 페이지 번역 시작");
+  
+  // 이미 번역 중이면 중복 실행 방지
+  if (TranslationState.isTranslating) {
+    return "이미 번역 중입니다.";
+  }
+  
+  TranslationState.isTranslating = true;
+  TranslationState.reset();
   
   // 번역 진행 상태 표시
   showTranslationStatus("번역 준비 중...");
   
   try {
-    // 2. 자연어 텍스트 추출
-    const textNodes = extractTextNodes(document.body);
-    console.log(`[번역 익스텐션] 추출된 텍스트 노드: ${textNodes.length}개`);
+    // 스크롤 이벤트 리스너 등록
+    setupScrollListener();
     
-    // 3. 텍스트 정보 리스트 생성 [원본텍스트, 빈칸(번역될 공간), 위치정보]
-    const textList = [];
+    // 현재 화면에 보이는 텍스트 노드 추출 및 번역
+    await translateVisibleContent();
     
-    textNodes.forEach(node => {
-      if (node.nodeType === Node.TEXT_NODE) {
-        const text = node.textContent.trim();
-        if (text && text.length > 1) { // 1글자 미만은 건너뜀
-          // XPath로 위치 정보 저장
-          const xpath = getXPathForNode(node);
-          textList.push([text, "", xpath]);
-        }
-      } else if (node.nodeType === Node.ELEMENT_NODE) {
-        // 속성에 있는 텍스트 (alt, title, placeholder 등)
-        ['title', 'alt', 'placeholder', 'value'].forEach(attr => {
-          if (node.hasAttribute(attr) && node.getAttribute(attr).trim().length > 1) {
-            const attrValue = node.getAttribute(attr);
-            const attrInfo = `${getXPathForElement(node)}|attr:${attr}`;
-            textList.push([attrValue, "", attrInfo]);
-          }
-        });
-      }
-    });
-    
-    console.log(`[번역 익스텐션] 번역할 텍스트 항목: ${textList.length}개`);
-    
-    if (textList.length === 0) {
-      hideTranslationStatus();
-      return "번역할 텍스트가 없습니다.";
-    }
-    
-    // 4. Gemini API로 번역
-    showTranslationStatus(`총 ${textList.length}개 항목 번역 중...`);
-    
-    // 텍스트 배치로 나누기
-    const batches = [];
-    for (let i = 0; i < textList.length; i += SETTINGS.batchSize) {
-      batches.push(textList.slice(i, i + SETTINGS.batchSize));
-    }
-    
-    let completedCount = 0;
-    const translatedTexts = [];
-    
-    // 제한된 동시 요청 수로 배치 처리
-    for (let i = 0; i < batches.length; i += SETTINGS.maxConcurrent) {
-      const currentBatch = batches.slice(i, i + SETTINGS.maxConcurrent);
-      const batchPromises = currentBatch.map(batch => translateTextBatch(batch));
-      
-      const batchResults = await Promise.all(batchPromises);
-      
-      batchResults.forEach(results => {
-        translatedTexts.push(...results);
-        completedCount += results.length;
-        showTranslationStatus(`${completedCount}/${textList.length} 항목 번역 완료...`);
-      });
-    }
-    
-    // 5. 번역된 텍스트를 DOM에 적용
-    showTranslationStatus("번역 결과 적용 중...");
-    replaceTextsInDOM(translatedTexts);
-    
-    // 완료 메시지 표시 후 상태 UI 숨기기
+    // 완료 메시지 표시
     showTranslationStatus("번역 완료!", true);
     setTimeout(() => {
       hideTranslationStatus();
     }, 2000);
     
-    return `${translatedTexts.length}개 항목 번역 완료`;
+    // 번역 상태 업데이트
+    TranslationState.isTranslating = false;
+    
+    return "현재 보이는 콘텐츠 번역 완료. 스크롤 시 추가 콘텐츠가 번역됩니다.";
   } catch (error) {
     hideTranslationStatus();
+    TranslationState.isTranslating = false;
     console.error("[번역 익스텐션] 번역 오류:", error);
     throw error;
   }
 }
 
 /**
- * Gemini API로 텍스트 배치 번역
- * @param {Array} textBatch 번역할 텍스트 배치 [[원본, "", 위치], ...]
- * @returns {Promise<Array>} 번역된 텍스트 배치 [[원본, 번역, 위치], ...]
+ * 스크롤 이벤트 리스너 설정
  */
-async function translateTextBatch(textBatch) {
+function setupScrollListener() {
+  // 이미 리스너가 있다면 추가하지 않음
+  if (window.hasScrollListener) return;
+  
+  window.addEventListener('scroll', handleScroll);
+  window.hasScrollListener = true;
+  console.log("[번역 익스텐션] 스크롤 감지 활성화");
+  
+  // 페이지 언로드 시 리스너 제거
+  window.addEventListener('beforeunload', () => {
+    window.removeEventListener('scroll', handleScroll);
+    window.hasScrollListener = false;
+  });
+}
+
+/**
+ * 스크롤 이벤트 핸들러
+ */
+function handleScroll() {
+  // 이미 타이머가 있으면 초기화
+  if (TranslationState.scrollTimer) {
+    clearTimeout(TranslationState.scrollTimer);
+  }
+  
+  // 스크롤 종료 후 일정 시간 후에 번역 수행
+  TranslationState.scrollTimer = setTimeout(async () => {
+    // 현재 스크롤 위치가 이전과 충분히 다른 경우만 처리
+    const currentScrollY = window.scrollY;
+    if (Math.abs(currentScrollY - TranslationState.lastScrollPosition) > SETTINGS.scrollThreshold) {
+      TranslationState.lastScrollPosition = currentScrollY;
+      
+      // 번역 중이 아닐 때만 실행
+      if (!TranslationState.isTranslating) {
+        console.log("[번역 익스텐션] 스크롤 감지, 새 콘텐츠 확인");
+        await translateVisibleContent();
+      }
+    }
+  }, 500); // 스크롤 종료 후 500ms 대기
+}
+
+/**
+ * 현재 화면에 보이는 콘텐츠 번역
+ */
+async function translateVisibleContent() {
+  TranslationState.isTranslating = true;
+  
+  try {
+    // 현재 화면에 보이는 노드 추출
+    const visibleNodes = extractVisibleTextNodes(document.body);
+    console.log(`[번역 익스텐션] 화면에 보이는 텍스트 노드: ${visibleNodes.length}개`);
+    
+    // 번역할 텍스트 정보 리스트 구성
+    const textList = [];
+    
+    visibleNodes.forEach(node => {
+      // 이미 처리된 노드는 건너뜀
+      if (TranslationState.processedNodes.has(node)) {
+        return;
+      }
+      
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.textContent.trim();
+        if (text && text.length >= SETTINGS.minTextLength) {
+          // XPath로 위치 정보 저장
+          const xpath = getXPathForNode(node);
+          textList.push([text, "", xpath, node]);
+        }
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        // 속성에 있는 텍스트 (alt, title, placeholder 등)
+        ['title', 'alt', 'placeholder', 'value'].forEach(attr => {
+          if (node.hasAttribute(attr) && node.getAttribute(attr).trim().length >= SETTINGS.minTextLength) {
+            const attrValue = node.getAttribute(attr);
+            const attrInfo = `${getXPathForElement(node)}|attr:${attr}`;
+            textList.push([attrValue, "", attrInfo, node]);
+          }
+        });
+      }
+      
+      // 처리된 노드로 표시
+      TranslationState.processedNodes.add(node);
+    });
+    
+    console.log(`[번역 익스텐션] 번역할 텍스트 항목: ${textList.length}개`);
+    
+    if (textList.length === 0) {
+      TranslationState.isTranslating = false;
+      return "번역할 새 텍스트가 없습니다.";
+    }
+    
+    // 캐시 체크 및 API로 번역이 필요한 텍스트 필터링
+    showTranslationStatus("캐시 확인 중...");
+    const needTranslation = [];
+    const cachedTranslations = [];
+    
+    // 모든 텍스트에 대해 캐시 확인
+    await Promise.all(textList.map(async (item) => {
+      const cachedTranslation = await TranslationCache.get(item[0], SETTINGS.targetLang);
+      
+      if (cachedTranslation) {
+        // 캐시에서 번역을 찾은 경우
+        cachedTranslations.push([item[0], cachedTranslation, item[2]]);
+      } else {
+        // 번역이 필요한 텍스트 목록에 추가
+        needTranslation.push(item);
+      }
+    }));
+    
+    console.log(`[번역 익스텐션] 캐시 히트: ${cachedTranslations.length}개, 번역 필요: ${needTranslation.length}개`);
+    
+    // 캐시된 번역 먼저 적용 (API 호출 전에 빠른 피드백)
+    if (cachedTranslations.length > 0) {
+      showTranslationStatus(`캐시된 ${cachedTranslations.length}개 항목 적용 중...`);
+      replaceTextsInDOM(cachedTranslations);
+    }
+    
+    // 번역이 필요한 텍스트가 있는 경우에만 API 호출
+    let newTranslations = [];
+    
+    if (needTranslation.length > 0) {
+      // 텍스트 최적화: 중복 제거
+      const uniqueTextsMap = new Map(); // 원본 텍스트 → [항목들]
+      
+      // 중복 텍스트 그룹화
+      needTranslation.forEach(item => {
+        const originalText = item[0];
+        if (!uniqueTextsMap.has(originalText)) {
+          uniqueTextsMap.set(originalText, []);
+        }
+        uniqueTextsMap.get(originalText).push(item);
+      });
+      
+      // 고유 텍스트 항목 추출
+      const uniqueItems = Array.from(uniqueTextsMap.entries()).map(([text, items]) => {
+        return items[0]; // 각 그룹의 첫 번째 항목 사용
+      });
+      
+      console.log(`[번역 익스텐션] 중복 제거 후 번역할 고유 텍스트: ${uniqueItems.length}개`);
+      
+      // 배치로 나누기
+      const batches = [];
+      for (let i = 0; i < uniqueItems.length; i += SETTINGS.batchSize) {
+        batches.push(uniqueItems.slice(i, i + SETTINGS.batchSize));
+      }
+      
+      console.log(`[번역 익스텐션] 총 ${batches.length}개 배치로 처리`);
+      
+      // 배치 처리 시작
+      showTranslationStatus(`${needTranslation.length}개 항목 번역 중... (0/${batches.length} 배치)`);
+      
+      // 병렬 처리를 위한 변수
+      let completedBatches = 0;
+      const uniqueTranslations = new Map(); // 원본 텍스트 → 번역
+      
+      // 제한된 동시 요청으로 배치 처리
+      for (let i = 0; i < batches.length; i += SETTINGS.maxConcurrentBatches) {
+        const currentBatches = batches.slice(i, i + SETTINGS.maxConcurrentBatches);
+        const batchPromises = currentBatches.map(batch => {
+          return translateBatch(batch).then(results => {
+            completedBatches++;
+            showTranslationStatus(`${needTranslation.length}개 항목 번역 중... (${completedBatches}/${batches.length} 배치)`);
+            return results;
+          });
+        });
+        
+        // 현재 그룹의 배치 결과 처리
+        const batchResults = await Promise.all(batchPromises);
+        
+        // 결과를 uniqueTranslations 맵에 추가
+        batchResults.forEach(batchResult => {
+          batchResult.forEach(([original, translated]) => {
+            uniqueTranslations.set(original, translated);
+          });
+        });
+      }
+      
+      // 모든 필요한 항목에 대해 번역 결과 매핑
+      newTranslations = needTranslation.map(item => {
+        const originalText = item[0];
+        const translation = uniqueTranslations.get(originalText) || originalText;
+        
+        // 번역 결과를 캐시에 저장 (각 고유 텍스트당 한 번만)
+        if (translation !== originalText && 
+            uniqueTranslations.get(originalText) === translation) {
+          TranslationCache.set(originalText, translation, SETTINGS.targetLang);
+        }
+        
+        return [originalText, translation, item[2]];
+      });
+      
+      // 새로 번역된 텍스트 적용
+      showTranslationStatus(`새로 번역된 ${newTranslations.length}개 항목 적용 중...`);
+      replaceTextsInDOM(newTranslations);
+    }
+    
+    // 모든 번역 항목 수 계산
+    const totalTranslated = cachedTranslations.length + newTranslations.length;
+    
+    // 완료 메시지 표시
+    showTranslationStatus(`번역 완료! (캐시: ${cachedTranslations.length}, 신규: ${newTranslations.length})`, true);
+    
+    TranslationState.isTranslating = false;
+    return `${totalTranslated}개 항목 번역 완료`;
+  } catch (error) {
+    TranslationState.isTranslating = false;
+    throw error;
+  }
+}
+
+/**
+ * 배치 번역 함수
+ * @param {Array} batch 번역할 항목 배치
+ * @returns {Promise<Array>} [원본, 번역] 쌍의 배열
+ */
+async function translateBatch(batch) {
   try {
     // 원본 텍스트만 추출
-    const originalTexts = textBatch.map(item => item[0]);
+    const originalTexts = batch.map(item => item[0]);
     
-    // Gemini API 요청 데이터 구성
-    const promptText = `다음 텍스트들을 ${SETTINGS.targetLang === 'ko' ? '한국어' : '대상 언어'}로 자연스럽게 번역해주세요. 
-각 텍스트는 번역만 해주고 다른 설명은 하지 말아주세요. 줄바꿈으로 구분된 번역 결과만 주세요.
-
-${originalTexts.join('\n')}`;
-
-    // Gemini API 호출
-    const translatedTexts = await callGeminiAPI(promptText);
+    // Gemini API로 번역
+    const translatedTexts = await translateTextsWithGemini(originalTexts);
     
-    // 응답 텍스트 처리
-    const translations = processTranslations(translatedTexts, originalTexts.length);
-    
-    // 배치 결과 구성 [원본, 번역, 위치]
-    return textBatch.map((item, index) => {
-      return [item[0], translations[index] || item[0], item[2]];
+    // 원본과 번역 결과 쌍으로 반환
+    return originalTexts.map((original, index) => {
+      return [original, translatedTexts[index] || original];
     });
   } catch (error) {
     console.error("[번역 익스텐션] 배치 번역 오류:", error);
-    // 오류 발생 시 원본 텍스트 반환
-    return textBatch.map(item => [item[0], item[0], item[2]]);
+    // 오류 발생 시 원본 반환
+    return batch.map(item => [item[0], item[0]]);
+  }
+}
+
+/**
+ * Gemini API로 텍스트 번역
+ * @param {Array<string>} texts 번역할 텍스트 배열
+ * @returns {Promise<Array<string>>} 번역된 텍스트 배열
+ */
+async function translateTextsWithGemini(texts) {
+  try {
+    // 텍스트에 구분자 추가
+    const separator = "||TRANSLATE_SEPARATOR||";
+    const joinedTexts = texts.join(separator);
+    
+    // Gemini API 프롬프트 구성
+    const promptText = `다음 텍스트들을 ${SETTINGS.targetLang === 'ko' ? '한국어' : '대상 언어'}로 자연스럽게 번역해주세요.
+각 텍스트는 '${separator}' 구분자로 분리되어 있습니다.
+번역 결과도 동일한 구분자로 분리해서 반환해주세요.
+원래 텍스트 수와 번역된 텍스트 수가 정확히 일치해야 합니다.
+번역만 제공하고 다른 설명은 하지 말아주세요.
+
+${joinedTexts}`;
+
+    // Gemini API 호출
+    const response = await callGeminiAPI(promptText);
+    
+    // 구분자로 분리
+    const translations = response.split(separator);
+    
+    // 번역 결과 개수가 원본과 다른 경우 처리
+    if (translations.length !== texts.length) {
+      console.warn(`[번역 익스텐션] 번역 결과 개수가 맞지 않습니다. 예상: ${texts.length}, 실제: ${translations.length}`);
+      
+      // 결과가 부족한 경우 원본으로 채움
+      while (translations.length < texts.length) {
+        translations.push(texts[translations.length]);
+      }
+      
+      // 결과가 많은 경우 잘라냄
+      if (translations.length > texts.length) {
+        translations.splice(texts.length);
+      }
+    }
+    
+    // 빈 문자열 처리
+    return translations.map((text, index) => text.trim() || texts[index]);
+  } catch (error) {
+    console.error("[번역 익스텐션] Gemini 번역 오류:", error);
+    throw error;
   }
 }
 
@@ -152,9 +555,10 @@ ${originalTexts.join('\n')}`;
  * @param {string} prompt Gemini에 전달할 프롬프트
  * @returns {Promise<string>} Gemini 응답 텍스트
  */
-async function callGeminiAPI(prompt) {  
+async function callGeminiAPI(prompt) {
   try {
-    const response = await fetch(GEMINI_API_URL, {
+    console.log("[번역 익스텐션] Gemini API 호출 시작");
+    const response = await fetch(`${SETTINGS.apiEndpoint}:generateContent?key=${SETTINGS.apiKey}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -167,8 +571,9 @@ async function callGeminiAPI(prompt) {
         }],
         generationConfig: {
           temperature: 0.1,
-          topP: 0.8,
-          topK: 40
+          topP: 0.95,
+          topK: 40,
+          maxOutputTokens: 8192
         }
       })
     });
@@ -179,6 +584,7 @@ async function callGeminiAPI(prompt) {
     }
     
     const data = await response.json();
+    console.log("[번역 익스텐션] Gemini API 응답 수신 완료");
     
     // 응답 텍스트 추출
     if (data.candidates && data.candidates.length > 0 && 
@@ -194,40 +600,14 @@ async function callGeminiAPI(prompt) {
 }
 
 /**
- * 번역 응답 처리 함수
- * @param {string} translatedText Gemini에서 받은 텍스트
- * @param {number} expectedCount 예상되는 번역 수
- * @returns {Array<string>} 처리된 번역 배열
+ * 현재 화면에 보이는 텍스트 노드 추출
+ * @param {Element} element 시작 요소
+ * @returns {Array} 화면에 보이는 텍스트 노드 배열
  */
-function processTranslations(translatedText, expectedCount) {
-  // 줄바꿈으로 분리
-  const lines = translatedText.split('\n').filter(line => line.trim());
+function extractVisibleTextNodes(element) {
+  const visibleNodes = [];
   
-  // 예상 개수와 맞지 않으면 조정
-  if (lines.length !== expectedCount) {
-    console.warn(`[번역 익스텐션] 번역 결과 개수가 맞지 않습니다. 예상: ${expectedCount}, 실제: ${lines.length}`);
-    
-    // 부족한 경우 빈 문자열로 채움
-    while (lines.length < expectedCount) {
-      lines.push("");
-    }
-    
-    // 초과하는 경우 잘라냄
-    if (lines.length > expectedCount) {
-      lines.splice(expectedCount);
-    }
-  }
-  
-  return lines;
-}
-
-/**
- * 2. DOM에서 텍스트 노드 추출
- */
-function extractTextNodes(element) {
-  const textNodes = [];
-  
-  // TreeWalker를 사용하여 텍스트 노드와 특정 속성을 가진 요소 노드 탐색
+  // TreeWalker로 모든 노드 탐색
   const walker = document.createTreeWalker(
     element,
     NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
@@ -276,10 +656,37 @@ function extractTextNodes(element) {
   // TreeWalker로 노드 탐색
   let node;
   while (node = walker.nextNode()) {
-    textNodes.push(node);
+    // 노드가 화면에 보이는지 확인
+    if (isNodeVisible(node)) {
+      visibleNodes.push(node);
+    }
   }
   
-  return textNodes;
+  return visibleNodes;
+}
+
+/**
+ * 노드가 현재 화면에 보이는지 확인
+ * @param {Node} node 확인할 노드
+ * @returns {boolean} 화면에 보이는지 여부
+ */
+function isNodeVisible(node) {
+  // 텍스트 노드인 경우 부모 요소 확인
+  const element = node.nodeType === Node.TEXT_NODE ? node.parentNode : node;
+  
+  // 요소가 없는 경우
+  if (!element || element.nodeType !== Node.ELEMENT_NODE) return false;
+  
+  // 요소의 화면 위치 확인
+  const rect = element.getBoundingClientRect();
+  
+  // 화면을 벗어난 경우
+  if (rect.top > window.innerHeight || rect.bottom < 0 ||
+      rect.left > window.innerWidth || rect.right < 0) {
+    return false;
+  }
+  
+  return true;
 }
 
 /**
@@ -367,87 +774,9 @@ function replaceTextsInDOM(translatedTexts) {
         }
       }
     } catch (error) {
-      console.error("[번역 익스텐션] 텍스트 교체 오류:", error);
+      console.error("[번역 익스텐션] 텍스트 교체 오류:", error, item);
     }
   });
   
   console.log(`[번역 익스텐션] ${replacedCount}개 텍스트 교체 완료`);
 }
-
-/**
- * 5. XPath로 요소 찾기
- */
-function getElementByXPath(xpath) {
-  try {
-    return document.evaluate(
-      xpath, 
-      document, 
-      null, 
-      XPathResult.FIRST_ORDERED_NODE_TYPE, 
-      null
-    ).singleNodeValue;
-  } catch (e) {
-    console.error('[번역 익스텐션] XPath 평가 오류:', e, xpath);
-    return null;
-  }
-}
-
-/**
- * 번역 상태 UI 생성 및 표시
- */
-function showTranslationStatus(message, isComplete = false) {
-  let statusElement = document.getElementById('translation-status-bar');
-  
-  if (!statusElement) {
-    statusElement = document.createElement('div');
-    statusElement.id = 'translation-status-bar';
-    
-    // 스타일 설정
-    Object.assign(statusElement.style, {
-      position: 'fixed',
-      bottom: '20px',
-      right: '20px',
-      padding: '10px 15px',
-      background: isComplete ? '#4CAF50' : '#2196F3',
-      color: 'white',
-      borderRadius: '5px',
-      boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
-      zIndex: '9999',
-      fontSize: '14px',
-      fontFamily: 'Arial, sans-serif',
-      transition: 'all 0.3s ease'
-    });
-    
-    document.body.appendChild(statusElement);
-  } else {
-    // 완료 상태일 경우 색상 변경
-    if (isComplete) {
-      statusElement.style.background = '#4CAF50';
-    }
-  }
-  
-  statusElement.textContent = message;
-}
-
-/**
- * 번역 상태 UI 숨기기
- */
-function hideTranslationStatus() {
-  const statusElement = document.getElementById('translation-status-bar');
-  if (statusElement) {
-    // 애니메이션 후 제거
-    statusElement.style.opacity = '0';
-    setTimeout(() => {
-      if (statusElement.parentNode) {
-        statusElement.parentNode.removeChild(statusElement);
-      }
-    }, 300);
-  }
-}
-
-// 현재 페이지 언어 감지 및 자동 번역 시작 (임시 비활성화)
-// if (document.readyState === 'complete') {
-//   detectPageLanguage();
-// } else {
-//   window.addEventListener('load', detectPageLanguage);
-// }
