@@ -8,7 +8,8 @@
       "activeTab",
       "contextMenus",
       "notifications",
-      "storage"
+      "storage",
+      "alarms"
     ],
     "host_permissions": [
       "https://translate-worker.redofyear2.workers.dev/*",
@@ -17,6 +18,12 @@
     "background": {
       "service_worker": "background.js"
     },
+    "content_scripts": [
+      {
+        "matches": ["<all_urls>"],
+        "js": ["utils/usage-manager.js", "content-script.js"]
+      }
+    ],
     "action": {
         "default_popup": "popup/popup.html",
         "default_icon": {

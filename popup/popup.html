@@ -1,15 +1,46 @@
+<!-- popup/popup.html -->
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>자연스러운 한국어 번역</title>
+  <title>Tony번역</title>
   <link rel="stylesheet" href="popup.css">
+  <script src="../utils/usage-manager.js"></script>
+
 </head>
 <body>
   <div class="container">
-    <h1>자연스러운 한국어 번역</h1>
-    <button id="translateBtn">현재 페이지 번역하기</button>
-    <div class="settings">
+    <h1>Tony번역</h1>
+    
+    <!-- 구독 정보 섹션 -->
+    <div class="subscription-info">
+      <div class="subscription-header">
+        <h2>구독 정보</h2>
+        <span class="badge" id="subscription-level">무료</span>
+      </div>
+      
+      <!-- 사용량 표시 -->
+      <div class="usage-container">
+        <div class="progress-container">
+          <div class="progress-bar" id="usage-progress"></div>
+        </div>
+        <div class="usage-details">
+          <span id="usage-text">0 / 15,000 토큰 사용</span>
+          <span id="remaining-text">남은 토큰: 15,000</span>
+        </div>
+        <div class="reset-info">
+          <span id="reset-date">다음 리셋: 2025년 4월 1일</span>
+        </div>
+      </div>
+      
+      <!-- 업그레이드 버튼 -->
+      <button id="upgradeButton" class="upgrade-button">구독 업그레이드</button>
+    </div>
+    
+    <!-- 번역 기능 설정 -->
+    <div class="translation-settings">
+      <h2>번역 설정</h2>
+      
       <div class="setting-item">
         <label for="targetLang">번역 언어:</label>
         <select id="targetLang">
@@ -17,30 +48,82 @@
           <option value="en">영어</option>
           <option value="ja">일본어</option>
           <option value="zh">중국어</option>
+          <option value="fr">프랑스어</option>
+          <option value="de">독일어</option>
+          <option value="es">스페인어</option>
+          <option value="ru">러시아어</option>
         </select>
       </div>
+      
       <div class="setting-item">
         <input type="checkbox" id="autoTranslate">
         <label for="autoTranslate">페이지 로드 시 자동 번역</label>
       </div>
+      
+      <div class="features">
+        <h3>기능</h3>
+        <div class="feature-item">
+          <input type="checkbox" id="translateText" checked>
+          <label for="translateText">텍스트 번역</label>
+        </div>
+        <div class="feature-item">
+          <input type="checkbox" id="translateImage" disabled>
+          <label for="translateImage">이미지 내 텍스트 번역</label>
+          <span class="premium-badge">Premium</span>
+        </div>
+      </div>
+      
+      <button id="translateButton" class="translate-button">현재 페이지 번역</button>
+      <button id="saveSettings" class="save-button">설정 저장</button>
     </div>
-    <div class="features">
-      <h2>기능</h2>
-      <div class="feature-item">
-        <input type="checkbox" id="translateText" checked>
-        <label for="translateText">텍스트 번역</label>
-      </div>
-      <div class="feature-item">
-        <input type="checkbox" id="translateImage" disabled>
-        <label for="translateImage">이미지 내 텍스트 번역 (개발 중)</label>
-      </div>
-      <div class="feature-item">
-        <input type="checkbox" id="translateChart" disabled>
-        <label for="translateChart">차트 해석 및 번역 (개발 중)</label>
-      </div>
+    
+    <!-- 구독 혜택 안내 -->
+    <div class="subscription-info-table">
+      <h2>구독 혜택</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>기능</th>
+            <th>무료</th>
+            <th>기본 $5</th>
+            <th>프리미엄 $10</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>월 사용량</td>
+            <td>15,000 토큰</td>
+            <td>100,000 토큰</td>
+            <td>무제한</td>
+          </tr>
+          <tr>
+            <td>지원 언어</td>
+            <td>5개</td>
+            <td>20개</td>
+            <td>50+</td>
+          </tr>
+          <tr>
+            <td>이미지 번역</td>
+            <td>❌</td>
+            <td>제한적</td>
+            <td>무제한</td>
+          </tr>
+          <tr>
+            <td>전문분야 최적화</td>
+            <td>❌</td>
+            <td>기본</td>
+            <td>고급</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
-    <button id="saveSettings">설정 저장</button>
+    
+    <!-- 버전 및 정보 -->
+    <div class="footer">
+      <p>버전 1.0 | <a href="#" id="privacyLink">개인정보처리방침</a> | <a href="#" id="helpLink">도움말</a></p>
+    </div>
   </div>
+  
   <script src="popup.js"></script>
 </body>
 </html>
