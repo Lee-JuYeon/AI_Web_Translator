@@ -87,13 +87,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // 설정값
 const SETTINGS = {
-  apiKey: '123123', // Gemini API 키 (임시값)
-  apiModel: 'gemini-1.5-flash', // Gemini 모델명
-  apiEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash', // API 엔드포인트
+  workerEndpoint: 'https://translate-worker.redofyear2.workers.dev',
   targetLang: 'ko',  // 대상 언어 (한국어)
   minTextLength: 2,  // 번역할 최소 텍스트 길이
   cacheExpiry: 30,   // 캐시 만료일 (일)
-  batchSize: 40,     // Gemini 1.5 Flash의 토큰 한계에 맞춘 최적 배치 크기
+  batchSize: 40,     // 최적 배치 크기
   maxConcurrentBatches: 3, // 최대 동시 배치 처리 수
   scrollThreshold: 200 // 스크롤 감지 임계값 (픽셀)
 };
@@ -114,6 +112,59 @@ const TranslationState = {
     this.visibleNodes = [];
   }
 };
+
+// 기존 함수 대체 - Gemini API 직접 호출 대신 Worker API 호출
+/**
+ * Cloudflare Worker를 통한 텍스트 번역
+ * @param {Array<string>} texts 번역할 텍스트 배열
+ * @returns {Promise<Array<string>>} 번역된 텍스트 배열
+ */
+async function translateTextsWithGemini(texts) {
+  try {
+    // Worker API에 요청할 데이터 구성
+    const requestData = {
+      texts: texts,
+      targetLang: SETTINGS.targetLang,
+      separator: "||TRANSLATE_SEPARATOR||"
+    };
+
+    // Worker API 호출
+    console.log("[번역 익스텐션] Worker API 호출 시작");
+    const response = await fetch(SETTINGS.workerEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(requestData)
+    });
+
+    if (!response.ok) {
+      let errorMessage = "Worker API 오류";
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.error || response.statusText;
+      } catch (e) {
+        errorMessage = response.statusText;
+      }
+      throw new Error(`Worker API 오류: ${errorMessage}`);
+    }
+
+    // 응답 데이터 파싱
+    const data = await response.json();
+    console.log("[번역 익스텐션] Worker API 응답 수신 완료");
+
+    // 성공 응답 확인
+    if (data.success && Array.isArray(data.translations)) {
+      return data.translations;
+    } else {
+      throw new Error(data.error || "Worker API에서 유효한 응답을 받지 못했습니다.");
+    }
+  } catch (error) {
+    console.error("[번역 익스텐션] Worker API 호출 오류:", error);
+    throw error;
+  }
+}
+
 
 // 번역 캐시 관리 객체
 const TranslationCache = {
@@ -478,6 +529,8 @@ async function translateVisibleContent() {
 }
 
 /**
+// 배치 번역 함수도 수정
+/**
  * 배치 번역 함수
  * @param {Array} batch 번역할 항목 배치
  * @returns {Promise<Array>} [원본, 번역] 쌍의 배열
@@ -487,7 +540,7 @@ async function translateBatch(batch) {
     // 원본 텍스트만 추출
     const originalTexts = batch.map(item => item[0]);
     
-    // Gemini API로 번역
+    // Worker API로 번역
     const translatedTexts = await translateTextsWithGemini(originalTexts);
     
     // 원본과 번역 결과 쌍으로 반환
@@ -502,102 +555,106 @@ async function translateBatch(batch) {
 }
 
 /**
- * Gemini API로 텍스트 번역
+ * Cloudflare Worker를 통한 텍스트 번역
  * @param {Array<string>} texts 번역할 텍스트 배열
  * @returns {Promise<Array<string>>} 번역된 텍스트 배열
  */
 async function translateTextsWithGemini(texts) {
   try {
-    // 텍스트에 구분자 추가
-    const separator = "||TRANSLATE_SEPARATOR||";
-    const joinedTexts = texts.join(separator);
-    
-    // Gemini API 프롬프트 구성
-    const promptText = `다음 텍스트들을 ${SETTINGS.targetLang === 'ko' ? '한국어' : '대상 언어'}로 자연스럽게 번역해주세요.
-각 텍스트는 '${separator}' 구분자로 분리되어 있습니다.
-번역 결과도 동일한 구분자로 분리해서 반환해주세요.
-원래 텍스트 수와 번역된 텍스트 수가 정확히 일치해야 합니다.
-번역만 제공하고 다른 설명은 하지 말아주세요.
+    // Worker API에 요청할 데이터 구성
+    const requestData = {
+      texts: texts,
+      targetLang: SETTINGS.targetLang,
+      separator: "||TRANSLATE_SEPARATOR||"
+    };
 
-${joinedTexts}`;
+    // Worker API 호출
+    console.log("[번역 익스텐션] Worker API 호출 시작");
+    const response = await fetch(SETTINGS.workerEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(requestData)
+    });
 
-    // Gemini API 호출
-    const response = await callGeminiAPI(promptText);
-    
-    // 구분자로 분리
-    const translations = response.split(separator);
-    
-    // 번역 결과 개수가 원본과 다른 경우 처리
-    if (translations.length !== texts.length) {
-      console.warn(`[번역 익스텐션] 번역 결과 개수가 맞지 않습니다. 예상: ${texts.length}, 실제: ${translations.length}`);
-      
-      // 결과가 부족한 경우 원본으로 채움
-      while (translations.length < texts.length) {
-        translations.push(texts[translations.length]);
+    if (!response.ok) {
+      let errorMessage = "Worker API 오류";
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.error || response.statusText;
+      } catch (e) {
+        errorMessage = response.statusText;
       }
-      
-      // 결과가 많은 경우 잘라냄
-      if (translations.length > texts.length) {
-        translations.splice(texts.length);
-      }
+      throw new Error(`Worker API 오류: ${errorMessage}`);
     }
-    
-    // 빈 문자열 처리
-    return translations.map((text, index) => text.trim() || texts[index]);
+
+    // 응답 데이터 파싱
+    const data = await response.json();
+    console.log("[번역 익스텐션] Worker API 응답 수신 완료");
+
+    // 성공 응답 확인
+    if (data.success && Array.isArray(data.translations)) {
+      return data.translations;
+    } else {
+      throw new Error(data.error || "Worker API에서 유효한 응답을 받지 못했습니다.");
+    }
   } catch (error) {
-    console.error("[번역 익스텐션] Gemini 번역 오류:", error);
+    console.error("[번역 익스텐션] Worker API 호출 오류:", error);
     throw error;
   }
 }
 
 /**
+ * callGeminiAPI 함수는 더 이상 필요하지 않음 (Worker가 대신 처리)
+// 따라서 아래 함수 제거:
  * Gemini API 호출 함수
  * @param {string} prompt Gemini에 전달할 프롬프트
  * @returns {Promise<string>} Gemini 응답 텍스트
  */
-async function callGeminiAPI(prompt) {
-  try {
-    console.log("[번역 익스텐션] Gemini API 호출 시작");
-    const response = await fetch(`${SETTINGS.apiEndpoint}:generateContent?key=${SETTINGS.apiKey}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        contents: [{
-          parts: [{
-            text: prompt
-          }]
-        }],
-        generationConfig: {
-          temperature: 0.1,
-          topP: 0.95,
-          topK: 40,
-          maxOutputTokens: 8192
-        }
-      })
-    });
+// async function callGeminiAPI(prompt) {
+//   try {
+//     console.log("[번역 익스텐션] Gemini API 호출 시작");
+//     const response = await fetch(`${SETTINGS.apiEndpoint}:generateContent?key=${SETTINGS.apiKey}`, {
+//       method: 'POST',
+//       headers: {
+//         'Content-Type': 'application/json'
+//       },
+//       body: JSON.stringify({
+//         contents: [{
+//           parts: [{
+//             text: prompt
+//           }]
+//         }],
+//         generationConfig: {
+//           temperature: 0.1,
+//           topP: 0.95,
+//           topK: 40,
+//           maxOutputTokens: 8192
+//         }
+//       })
+//     });
     
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(`Gemini API 오류: ${errorData.error?.message || response.statusText}`);
-    }
+//     if (!response.ok) {
+//       const errorData = await response.json();
+//       throw new Error(`Gemini API 오류: ${errorData.error?.message || response.statusText}`);
+//     }
     
-    const data = await response.json();
-    console.log("[번역 익스텐션] Gemini API 응답 수신 완료");
+//     const data = await response.json();
+//     console.log("[번역 익스텐션] Gemini API 응답 수신 완료");
     
-    // 응답 텍스트 추출
-    if (data.candidates && data.candidates.length > 0 && 
-        data.candidates[0].content && data.candidates[0].content.parts) {
-      return data.candidates[0].content.parts[0].text;
-    } else {
-      throw new Error("Gemini API에서 유효한 응답을 받지 못했습니다.");
-    }
-  } catch (error) {
-    console.error("[번역 익스텐션] Gemini API 호출 오류:", error);
-    throw error;
-  }
-}
+//     // 응답 텍스트 추출
+//     if (data.candidates && data.candidates.length > 0 && 
+//         data.candidates[0].content && data.candidates[0].content.parts) {
+//       return data.candidates[0].content.parts[0].text;
+//     } else {
+//       throw new Error("Gemini API에서 유효한 응답을 받지 못했습니다.");
+//     }
+//   } catch (error) {
+//     console.error("[번역 익스텐션] Gemini API 호출 오류:", error);
+//     throw error;
+//   }
+// }
 
 /**
  * 현재 화면에 보이는 텍스트 노드 추출
