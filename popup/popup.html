@@ -1,12 +1,15 @@
-<!-- popup/popup.html -->
+<!-- popup/popup.html - 수정됨 -->
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <title>Tony번역</title>
   <link rel="stylesheet" href="popup.css">
+  <!-- 필수 모듈 추가 (순서 중요) -->
+  <script src="../utils/cache-manager.js"></script>
   <script src="../utils/usage-manager.js"></script>
-
+  <script src="../utils/dom-handler.js"></script>
+  <script src="../utils/ui-manager.js"></script>
 </head>
 <body>
   <div class="container">
@@ -124,6 +127,7 @@
     </div>
   </div>
   
+  <!-- JS 파일은 마지막에 로드 -->
   <script src="popup.js"></script>
 </body>
 </html>

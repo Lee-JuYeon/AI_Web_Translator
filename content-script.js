@@ -1,4 +1,4 @@
-// content-script.js - 리팩토링 버전
+// content-script.js - UI 로직 분리 버전
 (function() {
   'use strict';
   
@@ -6,6 +6,17 @@
   if (window.tonyTranslatorInitialized) {
     console.log("[번역 익스텐션] 이미 초기화되어 중복 실행 방지");
     return; // 이미 초기화되었다면 함수 실행 중단
+  }
+  
+  // 필요한 모듈이 모두 로드되었는지 확인
+  if (!window.DOMHandler || !window.TranslatorService || !window.CacheManager || !window.UsageManager || !window.UIManager) {
+    console.error("[번역 익스텐션] 필요한 모듈이 로드되지 않았습니다. 로드 순서를 확인하세요.");
+    console.log("DOMHandler:", !!window.DOMHandler);
+    console.log("TranslatorService:", !!window.TranslatorService);
+    console.log("CacheManager:", !!window.CacheManager);
+    console.log("UsageManager:", !!window.UsageManager);
+    console.log("UIManager:", !!window.UIManager);
+    return; // 필요한 모듈이 없으면 실행 중단
   }
   
   // 초기화 표시 - 플래그 설정
@@ -66,6 +77,13 @@
           });
         }
         
+        if (window.UIManager) {
+          UIManager.updateSettings({
+            statusTimeout: 2000,
+            limitExceededTimeout: 10000
+          });
+        }
+        
         AppState.settings = settings;
         resolve(settings);
       });
@@ -89,7 +107,7 @@
     DOMHandler.setTranslatingState(true);
     
     // 번역 진행 상태 표시
-    DOMHandler.showTranslationStatus("번역 준비 중...");
+    UIManager.showTranslationStatus("번역 준비 중...");
     
     try {
       // 설정 로드
@@ -106,9 +124,9 @@
       await translateVisibleContent();
       
       // 완료 메시지 표시
-      DOMHandler.showTranslationStatus("번역 완료!", true);
+      UIManager.showTranslationStatus("번역 완료!", true);
       setTimeout(() => {
-        DOMHandler.hideTranslationStatus();
+        UIManager.hideTranslationStatus();
       }, 2000);
       
       // 번역 상태 업데이트
@@ -117,7 +135,7 @@
       
       return "현재 보이는 콘텐츠 번역 완료. 스크롤 시 추가 콘텐츠가 번역됩니다.";
     } catch (error) {
-      DOMHandler.hideTranslationStatus();
+      UIManager.hideTranslationStatus();
       AppState.isTranslating = false;
       DOMHandler.setTranslatingState(false);
       console.error("[번역 익스텐션] 번역 오류:", error);
@@ -148,12 +166,12 @@
       const textsToTranslate = nodeInfoList.map(item => item.text);
       
       // 텍스트 번역 (배치 처리)
-      DOMHandler.showTranslationStatus(`${textsToTranslate.length}개 항목 번역 중...`);
+      UIManager.showTranslationStatus(`${textsToTranslate.length}개 항목 번역 중...`);
       
       // 번역 이벤트 리스너 등록
       const batchCompleteListener = (event) => {
         const detail = event.detail;
-        DOMHandler.showTranslationStatus(
+        UIManager.showTranslationStatus(
           `${detail.total}개 항목 번역 중... (${detail.completed}/${detail.total} 배치, 캐시: ${detail.cachedCount}, 신규: ${detail.newCount})`
         );
       };
@@ -186,11 +204,11 @@
       }));
       
       // 번역된 텍스트 DOM에 적용
-      DOMHandler.showTranslationStatus(`번역 결과 적용 중...`);
+      UIManager.showTranslationStatus(`번역 결과 적용 중...`);
       const replacedCount = DOMHandler.replaceTextsInDOM(translationDataForDOM);
       
       // 완료 메시지 표시
-      DOMHandler.showTranslationStatus(
+      UIManager.showTranslationStatus(
         `번역 완료! (총 ${replacedCount}개 항목 적용)`, 
         true
       );
@@ -237,12 +255,23 @@
         return true;
       }
     });
-    
-    // 번역 한도 초과 이벤트 리스너 등록
-    window.addEventListener('translation:limit-exceeded', () => {
-      DOMHandler.showTranslationLimitExceeded(() => {
+  }
+  
+  /**
+   * 이벤트 리스너 설정
+   */
+  function setupEventListeners() {
+    // 번역 한도 초과 이벤트 리스너
+    window.addEventListener('usage:limit-exceeded', () => {
+      UIManager.showTranslationLimitExceeded(() => {
         chrome.runtime.sendMessage({ action: "openPopup" });
       });
+    });
+    
+    // DOM 관련 이벤트 리스너
+    window.addEventListener('dom:translating-state-changed', (event) => {
+      const { isTranslating } = event.detail;
+      AppState.isTranslating = isTranslating;
     });
   }
   
@@ -269,6 +298,9 @@
   function init() {
     // 메시지 리스너 설정
     setupMessageListeners();
+    
+    // 이벤트 리스너 설정
+    setupEventListeners();
     
     // 자동 번역 설정
     setupAutoTranslate();

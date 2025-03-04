@@ -1,45 +1,64 @@
-// popup/popup.js
+// popup/popup.js - UI 로직 분리 버전
 
 // 문서가 로드되면 실행
 document.addEventListener('DOMContentLoaded', async function() {
-  // 사용량 관리자 모듈 가져오기
-  // utils/usage-manager.js가 manifest.json의 content_scripts에 포함되어 있지만
-  // popup에서는 직접 로드해야 함
-  let usageManager;
-  
-  try {
-    // 백그라운드 페이지에서 UsageManager 객체 접근 시도
-    const backgroundPage = chrome.extension.getBackgroundPage();
-    if (backgroundPage && backgroundPage.UsageManager) {
-      usageManager = backgroundPage.UsageManager;
-    } else {
-      // 백그라운드 페이지에서 접근할 수 없는 경우 대체 방법
-      // 이 경우 popup.html에 <script src="../utils/usage-manager.js"></script>를 추가해야 함
-      usageManager = window.UsageManager;
-    }
+  // 필요한 모듈이 로드되었는지 확인
+  if (!window.UsageManager || !window.UIManager) {
+    console.error("[번역 익스텐션] 필요한 모듈이 로드되지 않았습니다. 로드 순서를 확인하세요.");
+    console.log("UsageManager:", !!window.UsageManager);
+    console.log("UIManager:", !!window.UIManager);
     
-    if (!usageManager) {
-      throw new Error('UsageManager를 찾을 수 없습니다');
-    }
-    
-    // 사용량 통계 가져오기
-    const stats = await usageManager.getUsageStats();
-    
-    // 사용량 UI 업데이트
-    updateUsageUI(stats);
-  } catch (error) {
-    console.error("UsageManager 접근 오류:", error);
-    // 오류 발생 시 기본 UI 표시
-    updateUsageUI({
-      subscription: 'FREE',
-      tokensUsed: 0,
-      limit: 15000,
-      remaining: 15000,
-      percentage: 0,
-      lastReset: new Date().toISOString()
-    });
+    // 기본 UI 표시 (대비책)
+    updateUIWithDefaultValues();
+    setupEventListeners();
+    return;
   }
   
+  try {
+    // 사용량 통계 가져오기
+    const stats = await UsageManager.getUsageStats();
+    
+    // 사용량 UI 업데이트
+    UIManager.updateUsageUI(stats);
+  } catch (error) {
+    console.error("UsageManager 접근 오류:", error);
+    
+    // 오류 발생 시 기본 UI 표시
+    updateUIWithDefaultValues();
+  }
+  
+  // 이벤트 리스너 설정
+  setupEventListeners();
+  
+  // 저장된 설정 로드
+  loadSettings();
+});
+
+/**
+ * 기본값으로 UI 업데이트 (오류 발생 시)
+ */
+function updateUIWithDefaultValues() {
+  const defaultStats = {
+    subscription: 'FREE',
+    tokensUsed: 0,
+    limit: 15000,
+    remaining: 15000,
+    percentage: 0,
+    lastReset: new Date().toISOString()
+  };
+  
+  // UIManager가 있으면 사용, 없으면 레거시 함수 사용
+  if (window.UIManager) {
+    UIManager.updateUsageUI(defaultStats);
+  } else {
+    updateUsageUI(defaultStats);
+  }
+}
+
+/**
+ * 이벤트 리스너 설정
+ */
+function setupEventListeners() {
   // 현재 페이지 번역 버튼 이벤트 리스너
   document.getElementById('translateButton').addEventListener('click', function() {
     chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
@@ -68,12 +87,11 @@ document.addEventListener('DOMContentLoaded', async function() {
     e.preventDefault();
     chrome.tabs.create({ url: 'https://your-website.com/help' });
   });
-  
-  // 저장된 설정 로드
-  loadSettings();
-});
+}
 
-// 설정 저장 함수
+/**
+ * 설정 저장 함수
+ */
 function saveSettings() {
   const settings = {
     targetLang: document.getElementById('targetLang').value,
@@ -87,16 +105,25 @@ function saveSettings() {
   chrome.storage.sync.set({ settings }, function() {
     // 저장 완료 표시
     const saveBtn = document.getElementById('saveSettings');
-    const originalText = saveBtn.textContent;
-    saveBtn.textContent = '저장됨!';
     
-    setTimeout(() => {
-      saveBtn.textContent = originalText;
-    }, 1500);
+    // UIManager가 있으면 사용
+    if (window.UIManager) {
+      UIManager.showSettingsSaved(saveBtn, "설정 저장", "저장됨!");
+    } else {
+      // 레거시 코드
+      const originalText = saveBtn.textContent;
+      saveBtn.textContent = '저장됨!';
+      
+      setTimeout(() => {
+        saveBtn.textContent = originalText;
+      }, 1500);
+    }
   });
 }
 
-// 저장된 설정 로드 함수
+/**
+ * 저장된 설정 로드 함수
+ */
 function loadSettings() {
   chrome.storage.sync.get('settings', data => {
     if (!data.settings) return;
@@ -110,14 +137,19 @@ function loadSettings() {
     // 기능 설정 적용
     if (settings.features) {
       document.getElementById('translateText').checked = settings.features.translateText !== false;
-      if (document.getElementById('translateImage')) {
-        document.getElementById('translateImage').checked = settings.features.translateImage || false;
+      
+      const translateImageCheckbox = document.getElementById('translateImage');
+      if (translateImageCheckbox) {
+        translateImageCheckbox.checked = settings.features.translateImage || false;
       }
     }
   });
 }
 
-// 사용량 UI 업데이트 함수
+/**
+ * 사용량 UI 업데이트 함수 (UIManager가 없을 때 대비책)
+ * @deprecated UIManager로 대체됨
+ */
 function updateUsageUI(stats) {
   // 등급 표시
   const subscriptionElement = document.getElementById('subscription-level');

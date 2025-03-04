@@ -1,4 +1,4 @@
-// utils/usage-manager.js - 리팩토링 버전
+// utils/usage-manager.js - UI 로직 분리 버전
 const UsageManager = (function() {
   'use strict';
   
@@ -108,7 +108,19 @@ const UsageManager = (function() {
     const usage = await getCurrentUsage();
     
     // 현재 사용량 + 예상 토큰 <= 한도
-    return (usage.tokensUsed + estimatedTokens) <= limit;
+    const isWithinLimit = (usage.tokensUsed + estimatedTokens) <= limit;
+    
+    // 한도 초과 시 이벤트 발생
+    if (!isWithinLimit) {
+      window.dispatchEvent(new CustomEvent('usage:limit-exceeded', {
+        detail: { 
+          required: estimatedTokens,
+          available: Math.max(0, limit - usage.tokensUsed)
+        }
+      }));
+    }
+    
+    return isWithinLimit;
   }
   
   /**
@@ -120,7 +132,7 @@ const UsageManager = (function() {
     const usage = await getCurrentUsage();
     const limit = SUBSCRIPTION_LIMITS[subscription];
     
-    return {
+    const stats = {
       subscription,
       tokensUsed: usage.tokensUsed,
       limit: limit,
@@ -128,6 +140,13 @@ const UsageManager = (function() {
       percentage: limit === -1 ? 0 : Math.min(100, Math.round((usage.tokensUsed / limit) * 100)),
       lastReset: usage.lastReset
     };
+    
+    // 이벤트 발생 (사용량 통계 준비됨)
+    window.dispatchEvent(new CustomEvent('usage:stats-ready', {
+      detail: { stats }
+    }));
+    
+    return stats;
   }
   
   /**
@@ -225,199 +244,45 @@ const UsageManager = (function() {
     return { ...SUBSCRIPTION_LIMITS };
   }
   
-  // 이벤트 리스너 설정 (필요한 경우)
-  function setupEventListeners() {
-    // DOMContentLoaded 이벤트에서 사용량 UI 업데이트
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', async () => {
-        try {
-          // popup.html에서만 실행 (페이지 URL 또는 DOM 구조로 확인)
-          if (document.querySelector('.subscription-info')) {
-            const stats = await getUsageStats();
-            updateUsageUI(stats);
-          }
-        } catch (error) {
-          console.error('[번역 익스텐션] 사용량 UI 업데이트 오류:', error);
-        }
-      });
-    } else {
-      // DOMContentLoaded가 이미 발생한 경우
-      try {
-        // popup.html에서만 실행
-        if (document.querySelector('.subscription-info')) {
-          getUsageStats().then(stats => {
-            updateUsageUI(stats);
-          });
-        }
-      } catch (error) {
-        console.error('[번역 익스텐션] 사용량 UI 업데이트 오류:', error);
-      }
+  /**
+   * 구독 등급을 사람이 읽기 쉬운 형태로 변환
+   * @param {string} subscription - 구독 등급 코드
+   * @returns {string} - 표시 이름
+   */
+  function getSubscriptionDisplayName(subscription) {
+    switch (subscription) {
+      case 'BASIC': return "기본 ($5/월)";
+      case 'PREMIUM': return "프리미엄 ($10/월)";
+      case 'FREE':
+      default: return "무료";
     }
   }
   
   /**
-   * 사용량 UI 업데이트 함수 (popup.html에서 사용)
-   * @param {Object} stats - 사용량 통계 객체
+   * 사용량을 로컬에 캐싱 (성능 최적화)
    */
-  function updateUsageUI(stats) {
-    // 등급 표시
-    const subscriptionElement = document.getElementById('subscription-level');
-    if (subscriptionElement) {
-      let subscriptionName = "무료";
-      if (stats.subscription === 'BASIC') subscriptionName = "기본 ($5/월)";
-      if (stats.subscription === 'PREMIUM') subscriptionName = "프리미엄 ($10/월)";
+  async function cacheLocalUsage() {
+    try {
+      const stats = await getUsageStats();
       
-      subscriptionElement.textContent = subscriptionName;
-    }
-    
-    // 프로그레스 바 업데이트
-    const progressBar = document.getElementById('usage-progress');
-    if (progressBar) {
-      if (stats.subscription === 'PREMIUM') {
-        progressBar.style.width = '100%';
-        progressBar.style.backgroundColor = '#4CAF50';
-      } else {
-        progressBar.style.width = `${stats.percentage}%`;
-        
-        // 경고 색상 (80% 이상이면 주황색, 95% 이상이면 빨간색)
-        if (stats.percentage >= 95) {
-          progressBar.style.backgroundColor = '#f44336';
-        } else if (stats.percentage >= 80) {
-          progressBar.style.backgroundColor = '#ff9800';
-        } else {
-          progressBar.style.backgroundColor = '#2196F3';
-        }
+      // 로컬 스토리지에 캐싱 (옵션)
+      if (window.localStorage) {
+        localStorage.setItem('usageStats', JSON.stringify({
+          stats,
+          timestamp: Date.now()
+        }));
       }
-    }
-    
-    // 사용량 텍스트 업데이트
-    const usageText = document.getElementById('usage-text');
-    if (usageText) {
-      if (stats.subscription === 'PREMIUM') {
-        usageText.textContent = `무제한 사용 가능`;
-      } else {
-        usageText.textContent = `${stats.tokensUsed.toLocaleString()} / ${stats.limit.toLocaleString()} 토큰 사용`;
-      }
-    }
-    
-    // 남은 양 업데이트
-    const remainingText = document.getElementById('remaining-text');
-    if (remainingText) {
-      if (stats.subscription === 'PREMIUM') {
-        remainingText.textContent = '무제한';
-      } else {
-        remainingText.textContent = `남은 토큰: ${stats.remaining.toLocaleString()}`;
-      }
-    }
-    
-    // 다음 리셋 날짜 표시
-    const resetText = document.getElementById('reset-date');
-    if (resetText) {
-      const resetDate = new Date(stats.lastReset);
-      resetDate.setMonth(resetDate.getMonth() + 1);
-      
-      const formattedDate = `${resetDate.getFullYear()}년 ${resetDate.getMonth() + 1}월 ${resetDate.getDate()}일`;
-      resetText.textContent = `다음 리셋: ${formattedDate}`;
-    }
-    
-    // 프리미엄 기능 상태 업데이트
-    const translateImageCheckbox = document.getElementById('translateImage');
-    if (translateImageCheckbox) {
-      translateImageCheckbox.disabled = stats.subscription !== 'PREMIUM';
-      
-      // 프리미엄 기능의 레이블에 disabled 클래스 추가/제거
-      const translateImageLabel = translateImageCheckbox.nextElementSibling;
-      if (translateImageLabel) {
-        if (stats.subscription === 'PREMIUM') {
-          translateImageLabel.classList.remove('disabled-text');
-        } else {
-          translateImageLabel.classList.add('disabled-text');
-        }
-      }
+    } catch (error) {
+      console.error("[번역 익스텐션] 사용량 캐싱 오류:", error);
     }
   }
   
-  /**
-   * 번역 한도 초과 시 알림 표시
-   * 참고: DOM 조작은 DOMHandler 모듈로 이동하는 것이 좋음
-   * @deprecated 이 함수는 하위 호환성을 위해 유지되며 새 구현에서는 DOMHandler.showTranslationLimitExceeded() 사용 권장
-   */
-  function showTranslationLimitExceeded() {
-    // DOMHandler 모듈이 있는 경우 위임
-    if (window.DOMHandler && typeof window.DOMHandler.showTranslationLimitExceeded === 'function') {
-      window.DOMHandler.showTranslationLimitExceeded(() => {
-        chrome.runtime.sendMessage({ action: "openPopup" });
-      });
-      return;
-    }
-    
-    // 레거시 구현 (DOMHandler가 없는 경우)
-    let limitElement = document.getElementById('translation-limit-exceeded');
-    
-    if (!limitElement) {
-      limitElement = document.createElement('div');
-      limitElement.id = 'translation-limit-exceeded';
-      
-      Object.assign(limitElement.style, {
-        position: 'fixed',
-        top: '20px',
-        right: '20px',
-        padding: '15px 20px',
-        background: '#f44336',
-        color: 'white',
-        borderRadius: '5px',
-        boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
-        zIndex: '9999',
-        fontSize: '14px',
-        fontFamily: 'Arial, sans-serif',
-        textAlign: 'center',
-        maxWidth: '300px'
-      });
-      
-      // 한도 초과 메시지
-      limitElement.innerHTML = `
-        <p><strong>번역 한도 초과!</strong></p>
-        <p>이번 달 번역 한도를 모두 사용했습니다.</p>
-        <p>더 많은 번역을 위해 구독 등급을 업그레이드하세요.</p>
-        <button id="upgrade-subscription" style="
-          background: white;
-          color: #f44336;
-          border: none;
-          padding: 8px 15px;
-          margin-top: 10px;
-          border-radius: 3px;
-          cursor: pointer;
-          font-weight: bold;
-        ">업그레이드</button>
-      `;
-      
-      document.body.appendChild(limitElement);
-      
-      // 업그레이드 버튼 클릭 이벤트
-      document.getElementById('upgrade-subscription').addEventListener('click', () => {
-        // 팝업 열기
-        chrome.runtime.sendMessage({ action: "openPopup" });
-        // 알림 숨기기
-        limitElement.style.display = 'none';
-      });
-      
-      // 10초 후 알림 자동 숨김
-      setTimeout(() => {
-        if (limitElement.parentNode) {
-          limitElement.style.opacity = '0';
-          limitElement.style.transition = 'opacity 0.5s';
-          setTimeout(() => {
-            if (limitElement.parentNode) {
-              limitElement.parentNode.removeChild(limitElement);
-            }
-          }, 500);
-        }
-      }, 10000);
-    }
-  }
-
-  // 초기화
-  setupEventListeners();
+  // 초기화 - 사용량 캐싱 (시작 시 1회)
+  cacheLocalUsage();
+  
+  // 이벤트 리스너 설정
+  window.addEventListener('usage:updated', () => cacheLocalUsage());
+  window.addEventListener('subscription:updated', () => cacheLocalUsage());
   
   // 공개 API
   return {
@@ -432,8 +297,7 @@ const UsageManager = (function() {
     setSubscription,
     checkAndResetMonthlyUsage,
     getLimits,
-    updateUsageUI,
-    showTranslationLimitExceeded
+    getSubscriptionDisplayName
   };
 })();
 
