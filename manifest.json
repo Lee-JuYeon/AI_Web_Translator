@@ -21,7 +21,13 @@
     "content_scripts": [
       {
         "matches": ["<all_urls>"],
-        "js": ["utils/usage-manager.js", "content-script.js"]
+        "js": [
+          "utils/cache-manager.js", 
+          "utils/usage-manager.js", 
+          "utils/dom-handler.js",
+          "utils/translator-service.js", 
+          "content-script.js"
+        ]
       }
     ],
     "action": {
