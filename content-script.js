@@ -1,4 +1,4 @@
-// content-script.js - UI 로직 분리 버전
+// content-script.js - IntersectionObserver 중심 개선 버전
 (function() {
   'use strict';
   
@@ -26,13 +26,15 @@
   const AppState = {
     isTranslating: false,
     settings: null,
+    pendingTranslation: false,
     
     /**
      * 상태 초기화
      */
     reset() {
       this.isTranslating = false;
-      DOMHandler.resetProcessedNodes();
+      this.pendingTranslation = false;
+      DOMHandler.resetTranslationState();
     }
   };
   
@@ -50,7 +52,9 @@
           minTextLength: 2,
           batchSize: 40,
           maxConcurrentBatches: 3,
-          scrollThreshold: 200
+          rootMargin: '200px',
+          textContainerSelector: 'p, h1, h2, h3, h4, h5, h6, li, span, a, td, th, caption, label, button, div:not(:empty)',
+          ignoreSelector: 'script, style, noscript, code, pre'
         };
         
         // 사용자 설정과 기본 설정 병합
@@ -67,7 +71,9 @@
         if (window.DOMHandler) {
           DOMHandler.updateSettings({
             minTextLength: settings.minTextLength,
-            scrollThreshold: settings.scrollThreshold
+            rootMargin: settings.rootMargin,
+            textContainerSelector: settings.textContainerSelector,
+            ignoreSelector: settings.ignoreSelector
           });
         }
         
@@ -115,25 +121,31 @@
         await loadSettings();
       }
       
-      // 스크롤 이벤트 리스너 등록
-      DOMHandler.setupScrollListener(() => {
-        translateVisibleContent();
-      });
+      // 기존 번역 상태 초기화
+      DOMHandler.resetTranslationState();
       
-      // 현재 화면에 보이는 텍스트 노드 추출 및 번역
-      await translateVisibleContent();
+      // IntersectionObserver 기반 번역 시스템 초기화
+      DOMHandler.initialize();
       
-      // 완료 메시지 표시
-      UIManager.showTranslationStatus("번역 완료!", true);
+      UIManager.showTranslationStatus("번역 진행 중...", true);
+      
+      // 완료 메시지 표시 (IntersectionObserver가 비동기적으로 번역 시작)
       setTimeout(() => {
-        UIManager.hideTranslationStatus();
-      }, 2000);
+        if (AppState.isTranslating) {
+          UIManager.showTranslationStatus("페이지 스크롤 시 추가 콘텐츠가 자동으로 번역됩니다.", true);
+          
+          // 일정 시간 후 상태 메시지 숨기기
+          setTimeout(() => {
+            UIManager.hideTranslationStatus();
+            
+            // 번역 상태 업데이트
+            AppState.isTranslating = false;
+            DOMHandler.setTranslatingState(false);
+          }, 3000);
+        }
+      }, 1000);
       
-      // 번역 상태 업데이트
-      AppState.isTranslating = false;
-      DOMHandler.setTranslatingState(false);
-      
-      return "현재 보이는 콘텐츠 번역 완료. 스크롤 시 추가 콘텐츠가 번역됩니다.";
+      return "번역이 시작되었습니다. 페이지 스크롤 시 추가 콘텐츠가 자동으로 번역됩니다.";
     } catch (error) {
       UIManager.hideTranslationStatus();
       AppState.isTranslating = false;
@@ -144,29 +156,28 @@
   }
   
   /**
-   * 현재 화면에 보이는 콘텐츠 번역
-   * @returns {Promise<string>} - 번역 결과 메시지
+   * 번역할 텍스트 노드 처리
+   * @param {Array} nodeInfoList - 텍스트 노드 정보 배열
+   * @param {Array} elements - 번역 대상 요소 배열
+   * @returns {Promise<number>} - 번역된 텍스트 수
    */
-  async function translateVisibleContent() {
-    AppState.isTranslating = true;
-    DOMHandler.setTranslatingState(true);
+  async function processTextNodes(nodeInfoList, elements) {
+    // 이미 번역 중이면 대기
+    if (AppState.pendingTranslation) {
+      console.log("[번역 익스텐션] 이미 번역 작업이 대기 중입니다.");
+      return 0;
+    }
+    
+    // 번역할 텍스트가 없으면 건너뜀
+    if (!nodeInfoList || nodeInfoList.length === 0) {
+      return 0;
+    }
+    
+    AppState.pendingTranslation = true;
     
     try {
-      // 현재 화면에 보이는 노드 추출
-      const nodeInfoList = DOMHandler.extractVisibleTextNodes(document.body);
-      console.log(`[번역 익스텐션] 화면에 보이는 텍스트 노드: ${nodeInfoList.length}개`);
-      
-      if (nodeInfoList.length === 0) {
-        AppState.isTranslating = false;
-        DOMHandler.setTranslatingState(false);
-        return "번역할 새 텍스트가 없습니다.";
-      }
-      
       // 텍스트 배열 추출
       const textsToTranslate = nodeInfoList.map(item => item.text);
-      
-      // 텍스트 번역 (배치 처리)
-      UIManager.showTranslationStatus(`${textsToTranslate.length}개 항목 번역 중...`);
       
       // 번역 이벤트 리스너 등록
       const batchCompleteListener = (event) => {
@@ -176,14 +187,8 @@
         );
       };
       
-      const translationErrorListener = (event) => {
-        const detail = event.detail;
-        console.error("[번역 익스텐션] 번역 오류:", detail.error);
-      };
-      
       // 이벤트 리스너 등록
       window.addEventListener('translation:batch-complete', batchCompleteListener);
-      window.addEventListener('translation:error', translationErrorListener);
       
       // 배치 처리를 통한 번역
       const translatedItems = await TranslatorService.translateInBatches(
@@ -194,7 +199,6 @@
       
       // 이벤트 리스너 제거
       window.removeEventListener('translation:batch-complete', batchCompleteListener);
-      window.removeEventListener('translation:error', translationErrorListener);
       
       // 번역 결과를 DOM에 적용하기 위한 형식으로 변환
       const translationDataForDOM = translatedItems.map((item, index) => ({
@@ -204,24 +208,15 @@
       }));
       
       // 번역된 텍스트 DOM에 적용
-      UIManager.showTranslationStatus(`번역 결과 적용 중...`);
-      const replacedCount = DOMHandler.replaceTextsInDOM(translationDataForDOM);
+      const replacedCount = DOMHandler.replaceTextsInDOM(translationDataForDOM, elements);
       
-      // 완료 메시지 표시
-      UIManager.showTranslationStatus(
-        `번역 완료! (총 ${replacedCount}개 항목 적용)`, 
-        true
-      );
+      AppState.pendingTranslation = false;
       
-      // 상태 업데이트
-      AppState.isTranslating = false;
-      DOMHandler.setTranslatingState(false);
-      
-      return `${replacedCount}개 항목 번역 완료`;
+      return replacedCount;
     } catch (error) {
-      AppState.isTranslating = false;
-      DOMHandler.setTranslatingState(false);
-      throw error;
+      console.error("[번역 익스텐션] 텍스트 노드 처리 오류:", error);
+      AppState.pendingTranslation = false;
+      return 0;
     }
   }
   
@@ -250,6 +245,11 @@
       // 설정 업데이트
       if (request.action === "updateSettings") {
         loadSettings().then(() => {
+          // 설정 변경 후 번역 시스템 재초기화
+          if (document.body) {
+            DOMHandler.resetTranslationState();
+            DOMHandler.initialize();
+          }
           sendResponse({ success: true });
         });
         return true;
@@ -273,23 +273,44 @@
       const { isTranslating } = event.detail;
       AppState.isTranslating = isTranslating;
     });
+    
+    // 텍스트 노드 준비됨 이벤트 리스너
+    window.addEventListener('dom:textnodes-ready', (event) => {
+      const { nodes, elements } = event.detail;
+      processTextNodes(nodes, elements);
+    });
+    
+    // 번역 완료 이벤트 리스너
+    window.addEventListener('dom:text-replaced', (event) => {
+      const { count } = event.detail;
+      // 특별한 처리 필요 시 여기에 추가
+    });
   }
   
   /**
    * 페이지 로드 완료 시 자동 번역 설정
    */
   function setupAutoTranslate() {
-    document.addEventListener('DOMContentLoaded', () => {
-      // 설정 로드
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => {
+        // 설정 로드
+        loadSettings().then(settings => {
+          if (settings.autoTranslate) {
+            translatePage();
+          }
+        });
+      });
+    } else {
+      // 이미 DOM이 로드된 경우
       loadSettings().then(settings => {
         if (settings.autoTranslate) {
           translatePage();
         }
       });
-      
-      // 주기적으로 오래된 캐시 정리
-      setTimeout(() => CacheManager.cleanupExpired(), 10000);
-    });
+    }
+    
+    // 주기적으로 오래된 캐시 정리
+    setTimeout(() => CacheManager.cleanupExpired(), 10000);
   }
   
   /**
@@ -305,10 +326,14 @@
     // 자동 번역 설정
     setupAutoTranslate();
     
+    // 페이지 언로드 시 리소스 정리
+    window.addEventListener('beforeunload', () => {
+      DOMHandler.cleanup();
+    });
+    
     // 필요한 기능을 전역으로 노출 (선택 사항)
     window.tonyTranslator = {
       translatePage,
-      translateVisibleContent,
       getSettings: () => AppState.settings
     };
     

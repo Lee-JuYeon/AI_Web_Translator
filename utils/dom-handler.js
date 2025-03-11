@@ -1,11 +1,15 @@
-// utils/dom-handler.js - UI 로직 분리 버전
+// utils/dom-handler.js - IntersectionObserver 중심 개선 버전
 const DOMHandler = (function() {
   'use strict';
   
   // 설정
   const DEFAULT_SETTINGS = {
-    minTextLength: 2,  // 번역할 최소 텍스트 길이
-    scrollThreshold: 200 // 스크롤 감지 임계값 (픽셀)
+    minTextLength: 2,        // 번역할 최소 텍스트 길이
+    rootMargin: '200px',     // IntersectionObserver의 루트 마진
+    translatedAttr: 'data-tony-translated', // 번역 완료된 요소 속성
+    pendingAttr: 'data-tony-pending',       // 번역 대기 중인 요소 속성
+    textContainerSelector: 'p, h1, h2, h3, h4, h5, h6, li, span, a, td, th, caption, label, button, div:not(:empty)',
+    ignoreSelector: 'script, style, noscript, code, pre'
   };
   
   // 서비스 설정
@@ -13,64 +17,121 @@ const DOMHandler = (function() {
   
   // 상태 관리
   const state = {
-    processedNodes: new WeakSet(), // 이미 처리된 노드 추적
-    lastScrollPosition: 0,         // 마지막 스크롤 위치
-    scrollTimer: null,             // 스크롤 타이머
-    isTranslating: false           // 번역 중 상태
+    isTranslating: false,          // 번역 중 상태
+    intersectionObserver: null,    // IntersectionObserver 인스턴스
+    mutationObserver: null,        // MutationObserver 인스턴스
+    observedElements: new WeakSet() // 이미 관찰 중인 요소 추적
   };
   
   /**
-   * 현재 화면에 보이는 텍스트 노드 추출
-   * @param {Element} element - 시작 요소 (보통 document.body)
-   * @returns {Array} - 노드와 위치 정보 배열 [{node, text, xpath}]
+   * IntersectionObserver 초기화
+   * @private
    */
-  function extractVisibleTextNodes(element) {
+  function initIntersectionObserver() {
+    // 이미 초기화되었다면 중복 생성 방지
+    if (state.intersectionObserver) return;
+    
+    state.intersectionObserver = new IntersectionObserver(
+      handleIntersection, 
+      { 
+        rootMargin: settings.rootMargin, 
+        threshold: 0.1  // 요소의 10%가 보이면 콜백 실행
+      }
+    );
+    
+    console.log("[번역 익스텐션] IntersectionObserver 초기화됨");
+  }
+  
+  /**
+   * MutationObserver 초기화
+   * @private
+   */
+  function initMutationObserver() {
+    // 이미 초기화되었다면 중복 생성 방지
+    if (state.mutationObserver) return;
+    
+    state.mutationObserver = new MutationObserver(handleMutation);
+    
+    // document.body 관찰 시작
+    if (document.body) {
+      state.mutationObserver.observe(document.body, {
+        childList: true,  // 자식 노드 추가/제거 감지
+        subtree: true     // 모든 하위 트리 변경 감지
+      });
+      
+      console.log("[번역 익스텐션] MutationObserver 초기화됨");
+    } else {
+      console.warn("[번역 익스텐션] document.body가 준비되지 않았습니다.");
+    }
+  }
+  
+  /**
+   * IntersectionObserver 콜백 핸들러
+   * @private
+   * @param {IntersectionObserverEntry[]} entries - 교차 변경된 요소들
+   */
+  function handleIntersection(entries) {
+    // 화면에 보이는 요소만 필터링
+    const visibleEntries = entries.filter(entry => entry.isIntersecting);
+    
+    if (visibleEntries.length === 0 || state.isTranslating) return;
+    
+    console.log(`[번역 익스텐션] ${visibleEntries.length}개 요소가 화면에 보임`);
+    
+    // 번역 대상 요소들
+    const elementsToProcess = visibleEntries.map(entry => entry.target);
+    
+    // 화면에 보이는 요소들에서 번역 대상 텍스트 노드 추출
     const visibleNodes = [];
     
-    // TreeWalker로 모든 노드 탐색
+    elementsToProcess.forEach(element => {
+      // 이미 번역된 요소는 건너뜀
+      if (element.hasAttribute(settings.translatedAttr)) return;
+      
+      // 번역 대기 중으로 표시
+      element.setAttribute(settings.pendingAttr, 'true');
+      
+      // 요소 내의 모든 텍스트 노드 추출
+      const textNodes = extractTextNodesFromElement(element);
+      
+      visibleNodes.push(...textNodes);
+    });
+    
+    // 추출된 텍스트 노드가 있으면 번역 이벤트 발생
+    if (visibleNodes.length > 0) {
+      console.log(`[번역 익스텐션] ${visibleNodes.length}개 텍스트 노드 번역 준비`);
+      
+      // 텍스트 번역 이벤트 발생
+      window.dispatchEvent(new CustomEvent('dom:textnodes-ready', {
+        detail: { nodes: visibleNodes, elements: elementsToProcess }
+      }));
+    }
+  }
+  
+  /**
+   * 요소에서 텍스트 노드 추출
+   * @private
+   * @param {Element} element - 텍스트 노드를 추출할 요소
+   * @returns {Array} - 노드와 위치 정보 배열 [{node, text, xpath}]
+   */
+  function extractTextNodesFromElement(element) {
+    const textNodes = [];
+    
+    // TreeWalker로 요소 내 모든 텍스트 노드 탐색
     const walker = document.createTreeWalker(
       element,
-      NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
+      NodeFilter.SHOW_TEXT,
       {
         acceptNode: function(node) {
-          // 이미 처리된 노드는 제외
-          if (state.processedNodes.has(node)) {
+          // 무시할 요소의 자식인 경우 제외
+          if (hasParentMatching(node, settings.ignoreSelector)) {
             return NodeFilter.FILTER_REJECT;
           }
           
-          // 스크립트, 스타일, 숨겨진 요소 내 텍스트는 제외
-          if (node.parentNode) {
-            const parentTag = node.parentNode.tagName ? node.parentNode.tagName.toLowerCase() : '';
-            if (parentTag === 'script' || parentTag === 'style' || parentTag === 'noscript' || 
-                parentTag === 'code' || parentTag === 'pre') {
-              return NodeFilter.FILTER_REJECT;
-            }
-            
-            // CSS로 숨겨진 요소 제외
-            if (node.parentNode.nodeType === Node.ELEMENT_NODE) {
-              const style = window.getComputedStyle(node.parentNode);
-              if (style.display === 'none' || style.visibility === 'hidden') {
-                return NodeFilter.FILTER_REJECT;
-              }
-            }
-          }
-          
-          // 텍스트 노드이고 내용이 있는 경우
-          if (node.nodeType === Node.TEXT_NODE) {
-            const text = node.textContent.trim();
-            if (text.length > 0) {
-              return NodeFilter.FILTER_ACCEPT;
-            }
-            return NodeFilter.FILTER_SKIP;
-          }
-          
-          // 특정 속성(title, alt, placeholder 등)을 가진 요소 노드
-          if (node.nodeType === Node.ELEMENT_NODE) {
-            if (node.hasAttribute('title') || node.hasAttribute('alt') || 
-                node.hasAttribute('placeholder') || 
-                (node.tagName === 'INPUT' && node.type !== 'password' && node.hasAttribute('value'))) {
-              return NodeFilter.FILTER_ACCEPT;
-            }
+          // 텍스트 노드의 내용이 있는 경우만 포함
+          const text = node.textContent.trim();
+          if (text.length >= settings.minTextLength) {
+            return NodeFilter.FILTER_ACCEPT;
           }
           
           return NodeFilter.FILTER_SKIP;
@@ -81,64 +142,250 @@ const DOMHandler = (function() {
     // TreeWalker로 노드 탐색
     let node;
     while (node = walker.nextNode()) {
-      // 노드가 화면에 보이는지 확인
-      if (isNodeVisible(node)) {
-        if (node.nodeType === Node.TEXT_NODE) {
-          const text = node.textContent.trim();
-          if (text && text.length >= settings.minTextLength) {
-            visibleNodes.push({
-              node,
-              text,
-              xpath: getXPathForNode(node),
-              type: 'text'
-            });
-          }
-        } else if (node.nodeType === Node.ELEMENT_NODE) {
-          // 속성에 있는 텍스트 (alt, title, placeholder 등)
-          ['title', 'alt', 'placeholder', 'value'].forEach(attr => {
-            if (node.hasAttribute(attr) && node.getAttribute(attr).trim().length >= settings.minTextLength) {
-              visibleNodes.push({
-                node,
-                text: node.getAttribute(attr),
-                xpath: `${getXPathForElement(node)}|attr:${attr}`,
-                type: 'attribute',
-                attribute: attr
-              });
-            }
-          });
-        }
-        
-        // 처리된 노드로 표시
-        state.processedNodes.add(node);
+      const text = node.textContent.trim();
+      if (text) {
+        textNodes.push({
+          node,
+          text,
+          xpath: getXPathForNode(node),
+          type: 'text'
+        });
       }
     }
     
-    return visibleNodes;
+    // 속성에 있는 텍스트 (title, alt, placeholder 등) 추가
+    ['title', 'alt', 'placeholder', 'aria-label'].forEach(attr => {
+      const elements = element.querySelectorAll(`[${attr}]`);
+      elements.forEach(el => {
+        const text = el.getAttribute(attr).trim();
+        if (text && text.length >= settings.minTextLength) {
+          textNodes.push({
+            node: el,
+            text: text,
+            xpath: `${getXPathForElement(el)}|attr:${attr}`,
+            type: 'attribute',
+            attribute: attr
+          });
+        }
+      });
+    });
+    
+    return textNodes;
   }
   
   /**
-   * 노드가 현재 화면에 보이는지 확인
+   * 노드가 특정 선택자에 매칭되는 부모를 가지고 있는지 확인
    * @private
    * @param {Node} node - 확인할 노드
-   * @returns {boolean} - 노드가 보이는지 여부
+   * @param {string} selector - CSS 선택자
+   * @returns {boolean} - 매칭되는 부모 존재 여부
    */
-  function isNodeVisible(node) {
-    // 텍스트 노드인 경우 부모 요소 확인
-    const element = node.nodeType === Node.TEXT_NODE ? node.parentNode : node;
+  function hasParentMatching(node, selector) {
+    let parent = node.parentNode;
     
-    // 요소가 없는 경우
-    if (!element || element.nodeType !== Node.ELEMENT_NODE) return false;
+    while (parent && parent !== document.body) {
+      if (parent.nodeType === Node.ELEMENT_NODE) {
+        if (parent.matches(selector)) {
+          return true;
+        }
+      }
+      parent = parent.parentNode;
+    }
     
-    // 요소의 화면 위치 확인
-    const rect = element.getBoundingClientRect();
+    return false;
+  }
+  
+  /**
+   * MutationObserver 콜백 핸들러
+   * @private
+   * @param {MutationRecord[]} mutations - 감지된 DOM 변경 사항
+   */
+  function handleMutation(mutations) {
+    // 번역 중에는 새 요소 처리 건너뜀
+    if (state.isTranslating) return;
     
-    // 화면을 벗어난 경우
-    if (rect.top > window.innerHeight || rect.bottom < 0 ||
-        rect.left > window.innerWidth || rect.right < 0) {
+    // 중요한 변경사항이 있는지 먼저 확인
+    let hasSignificantChanges = false;
+    
+    for (const mutation of mutations) {
+      if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+        // 실제 요소 노드가 추가되었는지 확인
+        for (const node of mutation.addedNodes) {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            hasSignificantChanges = true;
+            break;
+          }
+        }
+        
+        if (hasSignificantChanges) break;
+      }
+    }
+    
+    // 중요한 변경사항이 없으면 건너뜀
+    if (!hasSignificantChanges) return;
+    
+    console.log("[번역 익스텐션] DOM 변경 감지됨, 새 텍스트 컨테이너 검색");
+    
+    // 변경 사항에서 텍스트 컨테이너 요소 찾아서 IntersectionObserver에 등록
+    mutations.forEach(mutation => {
+      if (mutation.type === 'childList') {
+        mutation.addedNodes.forEach(node => {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            findAndObserveTextContainers(node);
+          }
+        });
+      }
+    });
+  }
+  
+  /**
+   * 요소 내에서 텍스트 컨테이너 요소들을 찾아 관찰 등록
+   * @param {Element} root - 검색 시작점 요소
+   */
+  function findAndObserveTextContainers(root) {
+    // 이미 번역된 요소는 건너뜀
+    if (root.hasAttribute(settings.translatedAttr) || 
+        root.hasAttribute(settings.pendingAttr)) {
+      return;
+    }
+    
+    // root 요소 자체가 텍스트 컨테이너인지 확인
+    if (isTextContainer(root)) {
+      observeElement(root);
+    }
+    
+    // 텍스트 컨테이너 선택자로 하위 요소 검색
+    const containers = root.querySelectorAll(settings.textContainerSelector);
+    
+    containers.forEach(element => {
+      // 이미 번역되었거나 번역 대기 중인 요소는 건너뜀
+      if (element.hasAttribute(settings.translatedAttr) || 
+          element.hasAttribute(settings.pendingAttr)) {
+        return;
+      }
+      
+      // 실제 텍스트가 있는 요소만 관찰 대상에 추가
+      if (isTextContainer(element)) {
+        observeElement(element);
+      }
+    });
+  }
+  
+  /**
+   * 요소가 텍스트 컨테이너인지 확인
+   * @private
+   * @param {Element} element - 확인할 요소
+   * @returns {boolean} - 텍스트 컨테이너 여부
+   */
+  function isTextContainer(element) {
+    // 무시할 선택자에 매칭되는 요소는 제외
+    if (element.matches(settings.ignoreSelector)) {
       return false;
     }
     
-    return true;
+    // 최소 길이 이상의 텍스트 내용이 있는지 확인
+    const text = element.textContent.trim();
+    if (text.length < settings.minTextLength) {
+      return false;
+    }
+    
+    // 자식 요소 중 텍스트 컨테이너가 있는지 확인
+    // 너무 큰 컨테이너(예: div)가 통째로 선택되는 것을 방지
+    const hasTextNodeChildren = Array.from(element.childNodes).some(
+      node => node.nodeType === Node.TEXT_NODE && node.textContent.trim().length >= settings.minTextLength
+    );
+    
+    // 속성에 텍스트가 있는지 확인
+    const hasAttrText = ['title', 'alt', 'placeholder', 'aria-label'].some(
+      attr => element.hasAttribute(attr) && element.getAttribute(attr).trim().length >= settings.minTextLength
+    );
+    
+    return hasTextNodeChildren || hasAttrText;
+  }
+  
+  /**
+   * 요소를 IntersectionObserver에 등록
+   * @private
+   * @param {Element} element - 관찰할 요소
+   */
+  function observeElement(element) {
+    // 이미 관찰 중인 요소는 건너뜀
+    if (state.observedElements.has(element)) {
+      return;
+    }
+    
+    // 번역 대기 중으로 표시
+    element.setAttribute(settings.pendingAttr, 'true');
+    
+    // IntersectionObserver에 등록
+    state.intersectionObserver.observe(element);
+    
+    // 관찰 중인 요소로 추가
+    state.observedElements.add(element);
+  }
+  
+  /**
+   * 번역된 텍스트를 DOM에 적용
+   * @param {Array} translatedItems - [{original, translated, xpath}] 형태의 번역 항목
+   * @param {Array} elements - 번역 대상이었던 요소 배열
+   * @returns {number} - 교체된 텍스트 수
+   */
+  function replaceTextsInDOM(translatedItems, elements = []) {
+    console.log(`[번역 익스텐션] ${translatedItems.length}개 텍스트 교체 시작`);
+    
+    let replacedCount = 0;
+    
+    translatedItems.forEach(item => {
+      try {
+        const { original, translated, xpath } = item;
+        
+        // 번역되지 않았거나 원본과 동일한 텍스트는 건너뜀
+        if (!translated || original === translated) {
+          return;
+        }
+        
+        // 속성인 경우 (xpath|attr:속성명)
+        if (xpath.includes('|attr:')) {
+          const [elementXpath, attrInfo] = xpath.split('|attr:');
+          const attrName = attrInfo;
+          const element = getElementByXPath(elementXpath);
+          
+          if (element && element.hasAttribute(attrName)) {
+            element.setAttribute(attrName, translated);
+            replacedCount++;
+          }
+        } 
+        // 텍스트 노드인 경우
+        else {
+          const textNode = getElementByXPath(xpath);
+          if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+            textNode.textContent = translated;
+            replacedCount++;
+          }
+        }
+      } catch (error) {
+        console.error("[번역 익스텐션] 텍스트 교체 오류:", error, item);
+      }
+    });
+    
+    // 번역 대상 요소들을 번역 완료로 표시
+    if (elements && elements.length > 0) {
+      elements.forEach(element => {
+        if (element.hasAttribute(settings.pendingAttr)) {
+          element.removeAttribute(settings.pendingAttr);
+          element.setAttribute(settings.translatedAttr, 'true');
+        }
+      });
+    }
+    
+    console.log(`[번역 익스텐션] ${replacedCount}개 텍스트 교체 완료`);
+    
+    // 번역 완료 이벤트 발행
+    window.dispatchEvent(new CustomEvent('dom:text-replaced', {
+      detail: { count: replacedCount }
+    }));
+    
+    return replacedCount;
   }
   
   /**
@@ -217,110 +464,28 @@ const DOMHandler = (function() {
   }
   
   /**
-   * 번역된 텍스트를 DOM에 적용
-   * @param {Array} translatedItems - [{original, translated, xpath}] 형태의 번역 항목
-   * @returns {number} - 교체된 텍스트 수
+   * 번역 시스템 초기화
+   * @returns {boolean} - 초기화 성공 여부
    */
-  function replaceTextsInDOM(translatedItems) {
-    console.log(`[번역 익스텐션] ${translatedItems.length}개 텍스트 교체 시작`);
-    
-    let replacedCount = 0;
-    
-    translatedItems.forEach(item => {
-      try {
-        const { original, translated, xpath } = item;
-        
-        // 번역되지 않았거나 원본과 동일한 텍스트는 건너뜀
-        if (!translated || original === translated) {
-          return;
-        }
-        
-        // 속성인 경우 (xpath|attr:속성명)
-        if (xpath.includes('|attr:')) {
-          const [elementXpath, attrInfo] = xpath.split('|attr:');
-          const attrName = attrInfo;
-          const element = getElementByXPath(elementXpath);
-          
-          if (element && element.hasAttribute(attrName)) {
-            element.setAttribute(attrName, translated);
-            replacedCount++;
-          }
-        } 
-        // 텍스트 노드인 경우
-        else {
-          const textNode = getElementByXPath(xpath);
-          if (textNode && textNode.nodeType === Node.TEXT_NODE) {
-            textNode.textContent = translated;
-            replacedCount++;
-          }
-        }
-      } catch (error) {
-        console.error("[번역 익스텐션] 텍스트 교체 오류:", error, item);
-      }
-    });
-    
-    console.log(`[번역 익스텐션] ${replacedCount}개 텍스트 교체 완료`);
-    
-    // 번역 완료 이벤트 발행
-    window.dispatchEvent(new CustomEvent('dom:text-replaced', {
-      detail: { count: replacedCount }
-    }));
-    
-    return replacedCount;
-  }
-  
-  /**
-   * 스크롤 이벤트 리스너 설정
-   * @param {Function} callback - 스크롤 후 호출될 콜백 함수
-   */
-  function setupScrollListener(callback) {
-    // 이미 리스너가 있다면 추가하지 않음
-    if (window.hasScrollListener) return;
-    
-    const handleScroll = () => {
-      // 이미 타이머가 있으면 초기화
-      if (state.scrollTimer) {
-        clearTimeout(state.scrollTimer);
-      }
+  function initialize() {
+    try {
+      initIntersectionObserver();
+      initMutationObserver();
       
-      // 스크롤 종료 후 일정 시간 후에 콜백 수행
-      state.scrollTimer = setTimeout(() => {
-        // 현재 스크롤 위치가 이전과 충분히 다른 경우만 처리
-        const currentScrollY = window.scrollY;
-        if (Math.abs(currentScrollY - state.lastScrollPosition) > settings.scrollThreshold) {
-          state.lastScrollPosition = currentScrollY;
-          
-          // 번역 중이 아닐 때만 콜백 실행
-          if (!state.isTranslating && typeof callback === 'function') {
-            callback();
-          }
-        }
-      }, 500); // 스크롤 종료 후 500ms 대기
-    };
-    
-    window.addEventListener('scroll', handleScroll);
-    window.hasScrollListener = true;
-    window.scrollHandler = handleScroll; // 핸들러 저장 (제거 시 사용)
-    
-    console.log("[번역 익스텐션] 스크롤 감지 활성화");
-    
-    // 페이지 언로드 시 리스너 제거
-    window.addEventListener('beforeunload', () => {
-      removeScrollListener();
-    });
-    
-    return handleScroll; // 리스너 함수 반환 (제거 시 사용)
-  }
-  
-  /**
-   * 스크롤 리스너 제거
-   */
-  function removeScrollListener() {
-    if (window.hasScrollListener && window.scrollHandler) {
-      window.removeEventListener('scroll', window.scrollHandler);
-      window.hasScrollListener = false;
-      window.scrollHandler = null;
-      console.log("[번역 익스텐션] 스크롤 감지 비활성화");
+      // 초기 페이지 텍스트 컨테이너 찾기 및 관찰 등록
+      if (document.body) {
+        findAndObserveTextContainers(document.body);
+        return true;
+      } else {
+        // body가 아직 준비되지 않은 경우 이벤트 리스너 추가
+        document.addEventListener('DOMContentLoaded', () => {
+          findAndObserveTextContainers(document.body);
+        });
+        return false;
+      }
+    } catch (error) {
+      console.error('[번역 익스텐션] 초기화 오류:', error);
+      return false;
     }
   }
   
@@ -346,10 +511,45 @@ const DOMHandler = (function() {
   }
   
   /**
-   * 처리된 노드 목록 초기화
+   * 모든 리소스 정리 및 관찰자 해제
    */
-  function resetProcessedNodes() {
-    state.processedNodes = new WeakSet();
+  function cleanup() {
+    if (state.intersectionObserver) {
+      state.intersectionObserver.disconnect();
+      state.intersectionObserver = null;
+    }
+    
+    if (state.mutationObserver) {
+      state.mutationObserver.disconnect();
+      state.mutationObserver = null;
+    }
+    
+    state.observedElements = new WeakSet();
+    console.log('[번역 익스텐션] 리소스 정리 완료');
+  }
+  
+  /**
+   * 번역 상태 초기화
+   */
+  function resetTranslationState() {
+    // 번역 상태 및 데이터 속성 초기화
+    const translatedElements = document.querySelectorAll(`[${settings.translatedAttr}]`);
+    translatedElements.forEach(element => {
+      element.removeAttribute(settings.translatedAttr);
+    });
+    
+    const pendingElements = document.querySelectorAll(`[${settings.pendingAttr}]`);
+    pendingElements.forEach(element => {
+      element.removeAttribute(settings.pendingAttr);
+    });
+    
+    // 상태 초기화
+    state.observedElements = new WeakSet();
+    
+    // 다시 초기화
+    initialize();
+    
+    console.log('[번역 익스텐션] 번역 상태 초기화 완료');
   }
   
   /**
@@ -357,7 +557,16 @@ const DOMHandler = (function() {
    * @param {Object} newSettings - 새 설정 값
    */
   function updateSettings(newSettings) {
+    const oldSettings = { ...settings };
     settings = { ...settings, ...newSettings };
+    
+    // 중요 설정이 변경된 경우 관찰자 재초기화
+    if (oldSettings.rootMargin !== settings.rootMargin || 
+        oldSettings.textContainerSelector !== settings.textContainerSelector ||
+        oldSettings.ignoreSelector !== settings.ignoreSelector) {
+      cleanup();
+      initialize();
+    }
   }
   
   /**
@@ -388,18 +597,17 @@ const DOMHandler = (function() {
   
   // 공개 API
   return {
-    extractVisibleTextNodes,
+    initialize,
     replaceTextsInDOM,
-    setupScrollListener,
-    removeScrollListener,
     getElementByXPath,
     setTranslatingState,
     getTranslatingState,
-    resetProcessedNodes,
+    resetTranslationState,
     updateSettings,
     getSettings,
     findElements,
-    findElement
+    findElement,
+    cleanup
   };
 })();
 

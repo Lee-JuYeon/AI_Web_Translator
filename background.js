@@ -1,4 +1,4 @@
-// background.js - 리팩토링 버전
+// background.js - IntersectionObserver 호환 버전
 (function() {
   'use strict';
   
@@ -10,11 +10,12 @@
       "utils/usage-manager.js", 
       "utils/dom-handler.js",
       "utils/translator-service.js",
+      "utils/ui-manager.js",
       "content-script.js"
     ]
   };
 
-  // 컨텍스트 메뉴 생성 - 수정된 부분
+  // 컨텍스트 메뉴 생성
   function createContextMenu() {
     // 기존 메뉴 항목이 있으면 먼저 삭제
     try {
@@ -87,7 +88,7 @@
   // 컨텍스트 메뉴 및 기본 설정 초기화
   function initializeExtension() {
     // 컨텍스트 메뉴 생성
-    createContextMenu(); // 수정된 함수 호출
+    createContextMenu();
     
     // 월간 사용량 리셋 설정
     setupMonthlyReset();
@@ -116,6 +117,18 @@
         loadScriptSequentially(index + 1);
       }).catch((err) => {
         console.error(`${APP_CONFIG.contentScripts[index]} 실행 실패:`, err);
+        
+        // 오류가 발생해도 계속 진행 (가능한 경우)
+        if (index + 1 < APP_CONFIG.contentScripts.length) {
+          loadScriptSequentially(index + 1);
+        } else {
+          // 최선의 노력으로 번역 시도
+          try {
+            chrome.tabs.sendMessage(tabId, { action: "translatePage" });
+          } catch (e) {
+            console.error("번역 요청 실패:", e);
+          }
+        }
       });
     };
 
@@ -188,6 +201,29 @@
               },
               subscription: data.subscription || 'FREE'
             });
+          });
+          return true;
+          
+        case "clearCache":
+          // 캐시 정리 요청 (popup.js에서 사용)
+          chrome.storage.local.get(null, (items) => {
+            const cacheKeys = Object.keys(items).filter(key => 
+              key.startsWith('translate_')
+            );
+            
+            if (cacheKeys.length > 0) {
+              chrome.storage.local.remove(cacheKeys, () => {
+                sendResponse({
+                  success: true, 
+                  clearedItems: cacheKeys.length
+                });
+              });
+            } else {
+              sendResponse({
+                success: true, 
+                clearedItems: 0
+              });
+            }
           });
           return true;
       }
