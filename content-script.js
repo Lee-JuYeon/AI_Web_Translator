@@ -1,30 +1,25 @@
-// content-script.js - 더 근본적인 수정 버전
+// content-script.js - 개선된 버전 (모듈화된 구조 사용)
 (function() {
   'use strict';
   
-  // 모듈 전역 에러 처리 추가
-  window.addEventListener('error', function(event) {
-    console.error('[번역 익스텐션] 전역 오류 발생:', event.error);
-  });
-  
-  // 초기화 플래그 확인 - 함수 내부 최상단에 위치
+  // 초기화 플래그 확인 - 중복 실행 방지
   if (window.tonyTranslatorInitialized) {
     console.log("[번역 익스텐션] 이미 초기화되어 중복 실행 방지");
-    return; // 이미 초기화되었다면 함수 실행 중단
+    return;
   }
   
-  // 필요한 모듈 로드 지연 함수
-  function ensureModulesLoaded(maxAttempts = 5, delay = 200) {
+  // 필요한 모듈 로드 확인 함수
+  function ensureModulesLoaded(maxAttempts = 5, delay = 300) {
     return new Promise((resolve, reject) => {
       let attempts = 0;
       
       function checkModules() {
         if (
-          window.DOMHandler && 
-          window.TranslatorService && 
-          window.CacheManager && 
-          window.UsageManager && 
-          window.UIManager
+          window.DOMSelector && 
+          window.DOMObserver && 
+          window.DOMManipulator && 
+          window.BatchEngine && 
+          window.TranslatorService
         ) {
           resolve(true);
           return;
@@ -33,11 +28,11 @@
         attempts++;
         if (attempts >= maxAttempts) {
           console.error("[번역 익스텐션] 필요한 모듈이 로드되지 않았습니다. 로드 순서를 확인하세요.");
-          console.log("DOMHandler:", !!window.DOMHandler);
+          console.log("DOMSelector:", !!window.DOMSelector);
+          console.log("DOMObserver:", !!window.DOMObserver);
+          console.log("DOMManipulator:", !!window.DOMManipulator);
+          console.log("BatchEngine:", !!window.BatchEngine);
           console.log("TranslatorService:", !!window.TranslatorService);
-          console.log("CacheManager:", !!window.CacheManager);
-          console.log("UsageManager:", !!window.UsageManager);
-          console.log("UIManager:", !!window.UIManager);
           reject(new Error("모듈 로드 실패"));
           return;
         }
@@ -48,38 +43,6 @@
       
       checkModules();
     });
-  }
-  
-  // 안전한 이벤트 핸들러 래퍼 함수
-  function createSafeEventListener(eventName, handler) {
-    return function safeHandler(event) {
-      try {
-        // 이벤트나 detail이 없으면 기본 객체 제공
-        const safeEvent = event || { type: eventName };
-        const safeDetail = (safeEvent.detail !== null && safeEvent.detail !== undefined) 
-          ? safeEvent.detail 
-          : {};
-          
-        // 핸들러 호출 시 안전한 이벤트와 디테일 전달
-        handler(safeEvent, safeDetail);
-      } catch (error) {
-        console.error(`[번역 익스텐션] ${eventName} 이벤트 처리 중 오류:`, error);
-      }
-    };
-  }
-  
-  // 안전한 이벤트 디스패치 함수
-  function safeDispatchEvent(eventName, detail = {}) {
-    try {
-      const event = new CustomEvent(eventName, { 
-        detail: detail || {} // null/undefined 방지
-      });
-      window.dispatchEvent(event);
-      return true;
-    } catch (error) {
-      console.error(`[번역 익스텐션] 이벤트 발행 오류 (${eventName}):`, error);
-      return false;
-    }
   }
   
   // 확장 프로그램 상태 확인
@@ -111,219 +74,75 @@
       this.isTranslating = false;
       this.pendingTranslation = false;
       
-      if (window.DOMHandler && typeof window.DOMHandler.resetTranslationState === 'function') {
-        try {
-          window.DOMHandler.resetTranslationState();
-        } catch (error) {
-          console.error("[번역 익스텐션] 상태 초기화 오류:", error);
-        }
+      if (window.DOMHandler) {
+        window.DOMHandler.resetTranslationState();
       }
     }
   };
   
   /**
-   * 번역할 텍스트 노드 처리 (주요 수정 대상)
-   * @param {Array} nodeInfoList - 텍스트 노드 정보 배열
-   * @param {Array} elements - 번역 대상 요소 배열
-   * @returns {Promise<number>} - 번역된 텍스트 수
-   */
-  async function processTextNodes(nodeInfoList, elements) {
-    // 입력 검증
-    if (!nodeInfoList || !Array.isArray(nodeInfoList) || nodeInfoList.length === 0) {
-      console.warn("[번역 익스텐션] 유효하지 않은 노드 정보 목록:", nodeInfoList);
-      return 0;
-    }
-    
-    // 이미 번역 중이면 대기
-    if (AppState.pendingTranslation) {
-      console.log("[번역 익스텐션] 이미 번역 작업이 대기 중입니다.");
-      return 0;
-    }
-    
-    // 모듈 유효성 검사
-    if (!window.TranslatorService || !window.DOMHandler) {
-      console.error("[번역 익스텐션] 필수 번역 모듈이 없습니다.");
-      return 0;
-    }
-    
-    AppState.pendingTranslation = true;
-    
-    try {
-      // 텍스트 배열 추출
-      const textsToTranslate = nodeInfoList.map(item => item.text || "");
-      
-      // 번역 이벤트 리스너 등록 (안전한 버전)
-      const batchCompleteListener = createSafeEventListener('translation:batch-complete', 
-        (event, detail) => {
-          if (detail) {
-            const total = detail.total || 0;
-            const completed = detail.completed || 0;
-            const cachedCount = detail.cachedCount || 0;
-            const newCount = detail.newCount || 0;
-            
-            if (window.UIManager && typeof window.UIManager.showTranslationStatus === 'function') {
-              window.UIManager.showTranslationStatus(
-                `${total}개 항목 번역 중... (${completed}/${total} 배치, 캐시: ${cachedCount}, 신규: ${newCount})`
-              );
-            }
-          }
-        }
-      );
-      
-      // 이벤트 리스너 등록
-      window.addEventListener('translation:batch-complete', batchCompleteListener);
-      
-      // 배치 처리를 통한 번역
-      const translatedItems = await window.TranslatorService.translateInBatches(
-        textsToTranslate, 
-        (AppState.settings && AppState.settings.batchSize) || 40, 
-        (AppState.settings && AppState.settings.maxConcurrentBatches) || 3
-      );
-      
-      // 이벤트 리스너 제거
-      window.removeEventListener('translation:batch-complete', batchCompleteListener);
-      
-      // 번역 결과가 없으면 종료
-      if (!translatedItems || !Array.isArray(translatedItems)) {
-        console.warn("[번역 익스텐션] 번역 결과가 없습니다.");
-        AppState.pendingTranslation = false;
-        return 0;
-      }
-      
-      // 번역 결과를 DOM에 적용하기 위한 형식으로 변환
-      const translationDataForDOM = translatedItems.map((item, index) => {
-        // 인덱스가 범위를 벗어나면 빈 객체 반환
-        if (!nodeInfoList[index]) return { original: "", translated: "", xpath: "" };
-        
-        return {
-          original: item.original || "",
-          translated: item.translated || "",
-          xpath: nodeInfoList[index].xpath || ""
-        };
-      }).filter(item => item.xpath); // 빈 xpath 항목 제거
-      
-      // 번역된 텍스트 DOM에 적용
-      const replacedCount = window.DOMHandler.replaceTextsInDOM(
-        translationDataForDOM, 
-        Array.isArray(elements) ? elements : []
-      );
-      
-      AppState.pendingTranslation = false;
-      
-      return replacedCount;
-    } catch (error) {
-      console.error("[번역 익스텐션] 텍스트 노드 처리 오류:", error);
-      AppState.pendingTranslation = false;
-      return 0;
-    }
-  }
-  
-  /**
-   * 이벤트 리스너 설정 (주요 수정 대상)
+   * 이벤트 리스너 설정
    */
   function setupEventListeners() {
-    // 텍스트 노드 준비됨 이벤트 리스너 (가장 중요한 문제 영역)
-    window.addEventListener('dom:textnodes-ready', createSafeEventListener(
-      'dom:textnodes-ready',
-      (event, detail) => {
-        // detail이 없을 경우 기본값 사용
-        const safeDetail = detail || {};
-        const nodes = safeDetail.nodes || [];
-        const elements = safeDetail.elements || [];
-        
-        // 값의 유효성 확인
-        if (nodes.length > 0) {
-          processTextNodes(nodes, elements).catch(error => {
-            console.error("[번역 익스텐션] 노드 처리 오류:", error);
-          });
-        } else {
-          console.warn("[번역 익스텐션] 텍스트 노드 이벤트에 노드가 없습니다.");
-        }
+    // 번역 상태 변경 이벤트
+    window.addEventListener('dom:translating-state-changed', function(event) {
+      try {
+        AppState.isTranslating = event.detail?.isTranslating === true;
+      } catch (error) {
+        console.warn("[번역 익스텐션] 번역 상태 이벤트 처리 오류:", error);
       }
-    ));
+    });
     
-    // 번역 한도 초과 이벤트 리스너
-    window.addEventListener('usage:limit-exceeded', createSafeEventListener(
-      'usage:limit-exceeded',
-      () => {
-        if (window.UIManager && typeof window.UIManager.showTranslationLimitExceeded === 'function') {
-          window.UIManager.showTranslationLimitExceeded(() => {
-            if (isExtensionContextValid()) {
-              chrome.runtime.sendMessage({ action: "openPopup" });
-            }
-          });
-        }
-      }
-    ));
-    
-    // DOM 관련 이벤트 리스너
-    window.addEventListener('dom:translating-state-changed', createSafeEventListener(
-      'dom:translating-state-changed',
-      (event, detail) => {
-        const isTranslating = detail.isTranslating === true;
-        AppState.isTranslating = isTranslating;
-      }
-    ));
-    
-    // 번역 완료 이벤트 리스너
-    window.addEventListener('dom:text-replaced', createSafeEventListener(
-      'dom:text-replaced',
-      (event, detail) => {
-        // 특별한 처리 필요 시 여기에 추가
-        const count = detail.count || 0;
-        console.log(`[번역 익스텐션] ${count}개 텍스트 교체됨`);
-      }
-    ));
-  }
-  
-  /**
-   * 번역 확장 초기화 메인 함수
-   */
-  async function initializeTranslator() {
-    try {
-      // 모듈 로드 확인 (비동기적으로 대기)
-      await ensureModulesLoaded();
-      
-      // 초기화 표시 - 플래그 설정
-      window.tonyTranslatorInitialized = true;
-      
-      // 이벤트 리스너 설정
-      setupEventListeners();
-      
-      // 크롬 메시지 리스너 설정 (확장 프로그램 컨텍스트가 유효한 경우에만)
-      if (isExtensionContextValid()) {
-        setupMessageListeners();
-      }
-      
-      // 설정 로드
-      await loadSettings();
-      
-      // 자동 번역 설정
-      setupAutoTranslate();
-      
-      // 페이지 언로드 시 리소스 정리
-      window.addEventListener('beforeunload', () => {
+    // 크롬 메시지 리스너 설정 (확장 프로그램 컨텍스트가 유효한 경우에만)
+    if (isExtensionContextValid()) {
+      chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         try {
-          if (window.DOMHandler && typeof window.DOMHandler.cleanup === 'function') {
-            window.DOMHandler.cleanup();
+          // ping 메시지 - 컨텐츠 스크립트가 로드되었는지 확인용
+          if (request.action === "ping") {
+            sendResponse({ status: "ready" });
+            return true;
+          }
+          
+          // 번역 요청
+          if (request.action === "translatePage") {
+            translatePage().then(result => {
+              if (isExtensionContextValid()) {
+                sendResponse({ success: true, result });
+              }
+            }).catch(error => {
+              console.error("[번역 익스텐션] 오류:", error);
+              if (isExtensionContextValid()) {
+                sendResponse({ success: false, error: error.message || '알 수 없는 오류' });
+              }
+            });
+            return true; // 비동기 응답을 위해 true 반환
+          }
+          
+          // 설정 업데이트
+          if (request.action === "updateSettings") {
+            loadSettings().then(() => {
+              if (isExtensionContextValid()) {
+                sendResponse({ success: true });
+              }
+            }).catch(error => {
+              console.error("[번역 익스텐션] 설정 업데이트 오류:", error);
+              if (isExtensionContextValid()) {
+                sendResponse({ success: false, error: error.message || '알 수 없는 오류' });
+              }
+            });
+            return true;
           }
         } catch (error) {
-          console.error("[번역 익스텐션] 리소스 정리 오류:", error);
+          console.error("[번역 익스텐션] 메시지 처리 오류:", error);
+          // 컨텍스트가 여전히 유효하면 응답 시도
+          if (isExtensionContextValid()) {
+            sendResponse({ success: false, error: error.message || '알 수 없는 오류' });
+          }
+          return true;
         }
+        
+        return false;
       });
-      
-      // 필요한 기능을 전역으로 노출
-      window.tonyTranslator = {
-        translatePage,
-        getSettings: () => AppState.settings,
-        safeDispatchEvent
-      };
-      
-      console.log("[번역 익스텐션] 초기화 완료");
-      return true;
-    } catch (error) {
-      console.error("[번역 익스텐션] 초기화 실패:", error);
-      return false;
     }
   }
   
@@ -332,12 +151,15 @@
    * @returns {Promise<Object>} - 설정 객체
    */
   async function loadSettings() {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       if (!isExtensionContextValid()) {
         // 컨텍스트가 무효화된 경우 기본 설정 사용
         const defaultSettings = getDefaultSettings();
         AppState.settings = defaultSettings;
+        
+        // 설정을 각 모듈에 적용
         applySettings(defaultSettings);
+        
         resolve(defaultSettings);
         return;
       }
@@ -349,7 +171,7 @@
             const defaultSettings = getDefaultSettings();
             
             // 사용자 설정과 기본 설정 병합
-            const settings = data && data.settings ? { ...defaultSettings, ...data.settings } : defaultSettings;
+            const settings = data?.settings ? { ...defaultSettings, ...data.settings } : defaultSettings;
             
             // 설정 적용
             applySettings(settings);
@@ -383,14 +205,15 @@
    */
   function getDefaultSettings() {
     return {
-      targetLang: 'ko',
-      autoTranslate: false,
-      minTextLength: 2,
-      batchSize: 40,
-      maxConcurrentBatches: 3,
-      rootMargin: '200px',
-      textContainerSelector: 'p, h1, h2, h3, h4, h5, h6, li, span, a, td, th, caption, label, button, div:not(:empty)',
-      ignoreSelector: 'script, style, noscript, code, pre'
+      targetLang: 'ko',              // 번역 대상 언어
+      autoTranslate: false,          // 페이지 로드 시 자동 번역
+      translateFullPage: true,       // 전체 페이지 번역 모드
+      immediateTranslation: true,    // 즉시 번역 모드
+      minTextLength: 1,              // 최소 텍스트 길이
+      batchSize: 50,                 // 배치 크기
+      maxConcurrentBatches: 3,       // 최대 동시 배치 수
+      highlightTranslated: false,    // 번역된 텍스트 강조 표시
+      keepOriginalOnHover: true      // 마우스 오버 시 원본 텍스트 표시
     };
   }
   
@@ -400,50 +223,32 @@
   function applySettings(settings) {
     if (!settings) return;
     
-    // 각 모듈에 설정 전달
-    if (window.TranslatorService && typeof window.TranslatorService.updateSettings === 'function') {
-      try {
-        window.TranslatorService.updateSettings({ 
-          targetLang: settings.targetLang,
-          workerEndpoint: 'https://translate-worker.redofyear2.workers.dev'
-        });
-      } catch (error) {
-        console.error("[번역 익스텐션] TranslatorService 설정 오류:", error);
-      }
+    // DOMHandler 설정 적용
+    if (window.DOMHandler) {
+      window.DOMHandler.updateSettings({
+        minTextLength: settings.minTextLength,
+        translateFullPage: settings.translateFullPage,
+        immediateTranslation: settings.immediateTranslation,
+        batchSize: settings.batchSize,
+        maxConcurrentBatches: settings.maxConcurrentBatches,
+        autoRefresh: true
+      });
     }
     
-    if (window.DOMHandler && typeof window.DOMHandler.updateSettings === 'function') {
-      try {
-        window.DOMHandler.updateSettings({
-          minTextLength: settings.minTextLength,
-          rootMargin: settings.rootMargin,
-          textContainerSelector: settings.textContainerSelector,
-          ignoreSelector: settings.ignoreSelector
-        });
-      } catch (error) {
-        console.error("[번역 익스텐션] DOMHandler 설정 오류:", error);
-      }
+    // DOMManipulator 설정 적용
+    if (window.DOMManipulator) {
+      window.DOMManipulator.updateSettings({
+        highlightTranslated: settings.highlightTranslated,
+        keepOriginalOnHover: settings.keepOriginalOnHover
+      });
     }
     
-    if (window.CacheManager && typeof window.CacheManager.updateSettings === 'function') {
-      try {
-        window.CacheManager.updateSettings({
-          expiryDays: 30  // 캐시 만료일 설정
-        });
-      } catch (error) {
-        console.error("[번역 익스텐션] CacheManager 설정 오류:", error);
-      }
-    }
-    
-    if (window.UIManager && typeof window.UIManager.updateSettings === 'function') {
-      try {
-        window.UIManager.updateSettings({
-          statusTimeout: 2000,
-          limitExceededTimeout: 10000
-        });
-      } catch (error) {
-        console.error("[번역 익스텐션] UIManager 설정 오류:", error);
-      }
+    // TranslatorService 설정 적용
+    if (window.TranslatorService) {
+      window.TranslatorService.updateSettings({
+        targetLang: settings.targetLang,
+        workerEndpoint: 'https://translate-worker.redofyear2.workers.dev'
+      });
     }
   }
   
@@ -465,126 +270,47 @@
       return "확장 프로그램 컨텍스트 오류. 페이지를 새로고침 해주세요.";
     }
     
-    // 필수 모듈 확인
-    if (!window.DOMHandler || !window.UIManager) {
-      console.error("[번역 익스텐션] 필수 모듈이 로드되지 않음");
-      return "필수 모듈이 로드되지 않았습니다.";
+    // 모듈 로드 확인
+    try {
+      await ensureModulesLoaded();
+    } catch (error) {
+      console.error("[번역 익스텐션] 모듈 로드 오류:", error);
+      return "필요한 모듈을 로드할 수 없습니다.";
     }
     
-    // 번역 상태 설정
-    AppState.isTranslating = true;
-    window.DOMHandler.setTranslatingState(true);
-    
-    // 번역 진행 상태 표시
-    window.UIManager.showTranslationStatus("번역 준비 중...");
+    // 설정 로드 (필요시)
+    if (!AppState.settings) {
+      await loadSettings();
+    }
     
     try {
-      // 설정 로드 (필요시)
-      if (!AppState.settings) {
-        await loadSettings();
-      }
-      
-      // 기존 번역 상태 초기화
-      window.DOMHandler.resetTranslationState();
-      
-      // IntersectionObserver 기반 번역 시스템 초기화
-      window.DOMHandler.initialize();
-      
-      window.UIManager.showTranslationStatus("번역 진행 중...");
-      
-      // 완료 메시지 표시 (IntersectionObserver가 비동기적으로 번역 시작)
-      setTimeout(() => {
-        if (AppState.isTranslating) {
-          window.UIManager.showTranslationStatus("페이지 스크롤 시 추가 콘텐츠가 자동으로 번역됩니다.", true);
-          
-          // 일정 시간 후 상태 메시지 숨기기
-          setTimeout(() => {
-            window.UIManager.hideTranslationStatus();
-            
-            // 번역 상태 업데이트
-            AppState.isTranslating = false;
-            window.DOMHandler.setTranslatingState(false);
-          }, 3000);
+      // 번역 시작
+      if (window.DOMHandler) {
+        // 기존 번역 상태 초기화
+        window.DOMHandler.resetTranslationState();
+        
+        // DOMHandler 모듈 초기화
+        window.DOMHandler.initialize();
+        
+        // 전체 페이지 번역 모드 확인
+        if (AppState.settings?.translateFullPage) {
+          // 전체 페이지 번역
+          await window.DOMHandler.translateFullPage();
+        } else {
+          // 화면에 보이는 부분만 번역
+          await window.DOMHandler.translateVisibleElements();
         }
-      }, 1000);
-      
-      return "번역이 시작되었습니다. 페이지 스크롤 시 추가 콘텐츠가 자동으로 번역됩니다.";
+        
+        return "번역이 시작되었습니다. 페이지 스크롤 시 추가 콘텐츠가 자동으로 번역됩니다.";
+      } else {
+        throw new Error("DOMHandler 모듈이 로드되지 않았습니다.");
+      }
     } catch (error) {
       console.error("[번역 익스텐션] 번역 오류:", error);
-      try {
-        window.UIManager.hideTranslationStatus();
-      } catch (e) {}
       
       AppState.isTranslating = false;
-      try {
-        window.DOMHandler.setTranslatingState(false);
-      } catch (e) {}
-      
       return `번역 오류: ${error.message || '알 수 없는 오류'}`;
     }
-  }
-  
-  /**
-   * 크롬 메시지 리스너 설정
-   */
-  function setupMessageListeners() {
-    // 컨텍스트가 유효하지 않으면 실행하지 않음
-    if (!isExtensionContextValid()) return;
-    
-    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-      try {
-        // ping 메시지 - 컨텐츠 스크립트가 로드되었는지 확인용
-        if (request.action === "ping") {
-          sendResponse({ status: "ready" });
-          return true;
-        }
-        
-        // 번역 요청
-        if (request.action === "translatePage") {
-          translatePage().then(result => {
-            if (isExtensionContextValid()) {
-              sendResponse({ success: true, result });
-            }
-          }).catch(error => {
-            console.error("[번역 익스텐션] 오류:", error);
-            if (isExtensionContextValid()) {
-              sendResponse({ success: false, error: error.message || '알 수 없는 오류' });
-            }
-          });
-          return true; // 비동기 응답을 위해 true 반환
-        }
-        
-        // 설정 업데이트
-        if (request.action === "updateSettings") {
-          loadSettings().then(() => {
-            // 설정 변경 후 번역 시스템 재초기화
-            if (document.body && window.DOMHandler) {
-              window.DOMHandler.resetTranslationState();
-              window.DOMHandler.initialize();
-            }
-            
-            if (isExtensionContextValid()) {
-              sendResponse({ success: true });
-            }
-          }).catch(error => {
-            console.error("[번역 익스텐션] 설정 업데이트 오류:", error);
-            if (isExtensionContextValid()) {
-              sendResponse({ success: false, error: error.message || '알 수 없는 오류' });
-            }
-          });
-          return true;
-        }
-      } catch (error) {
-        console.error("[번역 익스텐션] 메시지 처리 오류:", error);
-        // 컨텍스트가 여전히 유효하면 응답 시도
-        if (isExtensionContextValid()) {
-          sendResponse({ success: false, error: error.message || '알 수 없는 오류' });
-        }
-        return true;
-      }
-      
-      return false;
-    });
   }
   
   /**
@@ -611,24 +337,48 @@
         // 이미 DOM이 로드된 경우
         autoTranslateHandler();
       }
-      
-      // 주기적으로 오래된 캐시 정리
-      setTimeout(() => {
-        try {
-          if (window.CacheManager && typeof window.CacheManager.cleanupExpired === 'function') {
-            window.CacheManager.cleanupExpired();
-          }
-        } catch (error) {
-          console.error("[번역 익스텐션] 캐시 정리 오류:", error);
-        }
-      }, 10000);
     } catch (error) {
       console.error("[번역 익스텐션] 자동 번역 설정 오류:", error);
     }
   }
   
+  /**
+   * 애플리케이션 초기화
+   */
+  async function initializeApp() {
+    try {
+      // 모듈 로드 확인
+      await ensureModulesLoaded();
+      
+      // 초기화 플래그 설정
+      window.tonyTranslatorInitialized = true;
+      
+      // 이벤트 리스너 설정
+      setupEventListeners();
+      
+      // 설정 로드
+      await loadSettings();
+      
+      // 자동 번역 설정
+      setupAutoTranslate();
+      
+      // 필요한 기능을 전역으로 노출
+      window.tonyTranslator = {
+        translatePage,
+        getSettings: () => AppState.settings,
+        resetState: () => AppState.reset()
+      };
+      
+      console.log("[번역 익스텐션] 애플리케이션 초기화 완료");
+      return true;
+    } catch (error) {
+      console.error("[번역 익스텐션] 애플리케이션 초기화 실패:", error);
+      return false;
+    }
+  }
+  
   // 애플리케이션 초기화 (비동기)
-  initializeTranslator().catch(error => {
+  initializeApp().catch(error => {
     console.error("[번역 익스텐션] 초기화 실패:", error);
   });
   
