@@ -186,6 +186,87 @@ const DOMHandler = (function() {
     }
   }
   
+   /**
+   * 요소의 XPath 생성
+   * @private
+   * @param {Element} element - XPath를 생성할 요소
+   * @returns {string} - 요소의 XPath
+   */
+   function getXPathForElement(element) {
+    try {
+      if (!element || element.nodeType !== Node.ELEMENT_NODE) {
+        return '';
+      }
+      
+      // 문서 루트인 경우
+      if (element === document.documentElement) {
+        return '/html';
+      }
+      
+      // 부모 요소가 없는 경우
+      if (!element.parentNode) {
+        return '';
+      }
+      
+      // ID가 있는 경우 (고유 식별자) - 가장 간결하고 안정적인 XPath
+      if (element.id && typeof element.id === 'string' && element.id.trim() !== '') {
+        try {
+          // ID가 고유한지 확인 (동일 ID를 가진 요소가 여러 개 있을 수 있음)
+          const sameIdCount = document.querySelectorAll(`#${CSS.escape(element.id)}`).length;
+          if (sameIdCount === 1) {
+            return `//*[@id="${element.id}"]`;
+          }
+        } catch (idError) {
+          console.warn("[번역 익스텐션] ID 선택자 오류:", idError);
+        }
+      }
+      
+      // 부모 요소의 XPath + 현재 요소 태그 및 위치
+      try {
+        // 부모의 XPath 먼저 구함
+        const parentXPath = getXPathForElement(element.parentNode);
+        if (!parentXPath) return ''; // 부모 XPath를 구할 수 없으면 실패
+        
+        const tagName = element.tagName.toLowerCase();
+        
+        // 동일 태그명의 형제 요소들 찾기
+        const siblings = Array.from(element.parentNode.children || [])
+          .filter(e => e.tagName && e.tagName.toLowerCase() === tagName);
+        
+        // 형제가 하나뿐이면 인덱스 생략 가능
+        if (siblings.length === 1) {
+          return `${parentXPath}/${tagName}`;
+        }
+        
+        // 인덱스 계산 (1부터 시작)
+        const index = siblings.indexOf(element) + 1;
+        if (index <= 0) {
+          // 형제 목록에서 찾을 수 없는 경우 (비정상 상황)
+          console.warn("[번역 익스텐션] 형제 요소 목록에서 요소를 찾을 수 없음:", element);
+          return `${parentXPath}/${tagName}`;
+        }
+        
+        return `${parentXPath}/${tagName}[${index}]`;
+      } catch (siblingsError) {
+        console.warn("[번역 익스텐션] 형제 요소 처리 오류:", siblingsError);
+        
+        // 오류 발생 시 대체 XPath 생성 시도 (더 간단하지만 정확도 낮음)
+        try {
+          if (element.parentNode && element.tagName) {
+            return getXPathForElement(element.parentNode) + '/' + element.tagName.toLowerCase();
+          }
+        } catch (fallbackError) {
+          console.error("[번역 익스텐션] 대체 XPath 생성 오류:", fallbackError);
+        }
+        
+        return ''; // 실패 시 빈 문자열 반환
+      }
+    } catch (error) {
+      console.error("[번역 익스텐션] 요소 XPath 생성 오류:", error);
+      return '';
+    }
+  }
+  
   /**
    * 요소에서 텍스트 노드 추출
    * @private
