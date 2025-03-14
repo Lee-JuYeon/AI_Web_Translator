@@ -474,6 +474,12 @@ const DOMSelector = (function() {
       }
     }
     
+    // dom-selector.js 끝부분
+    if (typeof window !== 'undefined') {
+        window.DOMSelector = DOMSelector;
+        console.log('[번역 익스텐션] DOMSelector 모듈 등록됨');
+    }
+    
     // 공개 API
     return {
       isTextContainer,

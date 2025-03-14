@@ -14,14 +14,20 @@
       let attempts = 0;
       
       function checkModules() {
-        if (
-          window.DOMSelector && 
-          window.DOMObserver && 
-          window.DOMManipulator && 
-          window.BatchEngine && 
-          window.TranslatorService &&
-          window.DOMHandler // DOMHandler 모듈 확인 추가
-        ) {
+        // 각 모듈 로드 확인
+        const modulesStatus = {
+          DOMSelector: !!window.DOMSelector,
+          DOMObserver: !!window.DOMObserver,
+          DOMManipulator: !!window.DOMManipulator,
+          BatchEngine: !!window.BatchEngine,
+          TranslatorService: !!window.TranslatorService,
+          DOMHandler: !!window.DOMHandler
+        };
+
+          // 모든 모듈이 로드되었는지 확인
+        const allLoaded = Object.values(modulesStatus).every(status => status);
+        
+        if (allLoaded) {
           console.log("[번역 익스텐션] 필요한 모든 모듈이 로드되었습니다.");
           resolve(true);
           return;
@@ -29,13 +35,18 @@
         
         attempts++;
         if (attempts >= maxAttempts) {
-          console.error("[번역 익스텐션] 필요한 모듈이 로드되지 않았습니다. 로드 순서를 확인하세요.");
-          console.log("DOMSelector:", !!window.DOMSelector);
-          console.log("DOMObserver:", !!window.DOMObserver);
-          console.log("DOMManipulator:", !!window.DOMManipulator);
-          console.log("BatchEngine:", !!window.BatchEngine);
-          console.log("TranslatorService:", !!window.TranslatorService);
-          console.log("DOMHandler:", !!window.DOMHandler); // DOMHandler 상태 로깅 추가
+          // 로드되지 않은 모듈들 목록화
+          const missingModules = Object.entries(modulesStatus)
+            .filter(([_, loaded]) => !loaded)
+            .map(([name]) => name);
+            
+          console.error(`[번역 익스텐션] 다음 모듈들이 로드되지 않았습니다: ${missingModules.join(', ')}`);
+          
+          // 각 모듈 상태 로깅
+          Object.entries(modulesStatus).forEach(([name, loaded]) => {
+            console.log(`${name}: ${loaded}`);
+          });
+          
           reject(new Error("모듈 로드 실패"));
           return;
         }

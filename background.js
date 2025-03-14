@@ -8,9 +8,12 @@
     contentScripts: [
       "utils/cache-manager.js",
       "utils/usage-manager.js", 
-      "utils/dom-handler.js",
+      "utils/dom/dom-selector.js",
+      "utils/dom/dom-observer.js",
+      "utils/dom/dom-manipulator.js",
+      "utils/batch/batch_engine.js",
       "utils/translator-service.js",
-      "utils/ui-manager.js",
+      "utils/dom/dom-handler.js",
       "content-script.js"
     ]
   };
