@@ -431,9 +431,11 @@ const TranslatorService = (function() {
           }
           
           // 429 오류 (Too Many Requests)일 경우 속도 제한 활성화
-          if (response.status === 429) {
+          if (response.status === 429 || text.includes("KV put() limit exceeded")) {
             console.warn("[번역 익스텐션] API 속도 제한 감지됨:", errorMessage);
-            
+            // 메모리 내 임시 캐시 사용 전환
+            console.warn("[번역 익스텐션] 서버 한도 감지, 로컬 캐싱으로 전환");
+            state.useServerCache = false;
             // 속도 제한 설정
             state.rateLimited = true;
             
@@ -455,9 +457,9 @@ const TranslatorService = (function() {
             
             console.warn(`[번역 익스텐션] API 오류, ${options.retryCount + 1}번째 재시도 중: ${errorMessage}`);
             
-            // 지수 백오프 (재시도 횟수에 따라 대기 시간 증가)
-            const delay = settings.retryDelay * Math.pow(2, options.retryCount);
-            await new Promise(resolve => setTimeout(resolve, delay));
+            // 지수 백오프 적용 (연속 재시도 사이 간격 점점 더 늘림)
+            const retryDelay = settings.retryDelay * Math.pow(2, options.retryCount || 0);
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
             
             // 재시도
             state.activeRequests--;

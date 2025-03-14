@@ -644,4 +644,4 @@ const BatchEngine = (function() {
   })();
   
   // 모듈 내보내기
-  window.BatchEngine = BatchEngine;
+  window.BatchEngine = BatchEngine; 
