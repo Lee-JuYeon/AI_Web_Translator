@@ -9,7 +9,7 @@
   }
   
   // 필요한 모듈 로드 확인 함수
-  function ensureModulesLoaded(maxAttempts = 5, delay = 300) {
+  function ensureModulesLoaded(maxAttempts = 10, delay = 500) {
     return new Promise((resolve, reject) => {
       let attempts = 0;
       
@@ -19,8 +19,10 @@
           window.DOMObserver && 
           window.DOMManipulator && 
           window.BatchEngine && 
-          window.TranslatorService
+          window.TranslatorService &&
+          window.DOMHandler // DOMHandler 모듈 확인 추가
         ) {
+          console.log("[번역 익스텐션] 필요한 모든 모듈이 로드되었습니다.");
           resolve(true);
           return;
         }
@@ -33,10 +35,12 @@
           console.log("DOMManipulator:", !!window.DOMManipulator);
           console.log("BatchEngine:", !!window.BatchEngine);
           console.log("TranslatorService:", !!window.TranslatorService);
+          console.log("DOMHandler:", !!window.DOMHandler); // DOMHandler 상태 로깅 추가
           reject(new Error("모듈 로드 실패"));
           return;
         }
         
+        console.log(`[번역 익스텐션] 모듈 로드 대기 중... (시도 ${attempts}/${maxAttempts})`);
         // 다시 시도
         setTimeout(checkModules, delay);
       }
@@ -347,7 +351,9 @@
    */
   async function initializeApp() {
     try {
-      // 모듈 로드 확인
+      console.log("[번역 익스텐션] 애플리케이션 초기화 시작...");
+      
+      // 모듈 로드 확인을 위해 더 긴 시간 대기
       await ensureModulesLoaded();
       
       // 초기화 플래그 설정
@@ -377,9 +383,23 @@
     }
   }
   
-  // 애플리케이션 초기화 (비동기)
-  initializeApp().catch(error => {
-    console.error("[번역 익스텐션] 초기화 실패:", error);
-  });
+  // 초기 로드 지연: DOM 완전히 로드된 후 모듈 초기화
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      // DOM 로드 후 짧은 지연 추가하여 모든 모듈이 준비될 시간 제공
+      setTimeout(() => {
+        initializeApp().catch(error => {
+          console.error("[번역 익스텐션] 초기화 실패:", error);
+        });
+      }, 500);
+    });
+  } else {
+    // 이미 DOM 로드 완료된 경우 약간의 지연 후 초기화
+    setTimeout(() => {
+      initializeApp().catch(error => {
+        console.error("[번역 익스텐션] 초기화 실패:", error);
+      });
+    }, 500);
+  }
   
 })();
