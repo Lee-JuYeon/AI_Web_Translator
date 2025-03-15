@@ -473,21 +473,23 @@ const DOMSelector = (function() {
       }
     }
     
-    // 모든 함수를 전역 객체에 직접 할당
-    window.DOMSelector.isValidSelector = isValidSelector;
-    window.DOMSelector.isTextContainer = isTextContainer;
-    window.DOMSelector.hasParentMatching = hasParentMatching;
-    window.DOMSelector.extractTextNodesFromElement = extractTextNodesFromElement;
-    window.DOMSelector.findTextContainers = findTextContainers;
-    window.DOMSelector.findElements = findElements;
-    window.DOMSelector.findElement = findElement;
-    window.DOMSelector.extractAllTextNodes = extractAllTextNodes;
-    window.DOMSelector.updateSettings = updateSettings;
-    window.DOMSelector.getSettings = getSettings;
-    window.DOMSelector.resetAllTranslationAttributes = resetAllTranslationAttributes;
-    
-    console.log('[번역 익스텐션] DOMSelector 모듈 등록됨');
-  })();
-  
-  // 모듈 내보내기
-//   window.DOMSelector = DOMSelector;
+    // 공개 API 객체 반환
+    return {
+        isValidSelector,
+        isTextContainer,
+        hasParentMatching,
+        extractTextNodesFromElement,
+        findTextContainers,
+        findElements,
+        findElement,
+        extractAllTextNodes,
+        updateSettings,
+        getSettings,
+        resetAllTranslationAttributes
+    };
+})();
+
+// 모듈 내보내기
+window.DOMSelector = DOMSelector;
+
+console.log('[번역 익스텐션] DOMSelector 모듈 등록됨');

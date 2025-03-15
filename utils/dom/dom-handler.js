@@ -6,20 +6,20 @@ const DOMHandler = (function() {
   // 기본 설정
   const DEFAULT_SETTINGS = {
     minTextLength: 1,        // 번역할 최소 텍스트 길이 (1로 변경하여 더 많은 텍스트 포함)
-    rootMargin: '500px',     // IntersectionObserver의 루트 마진 (500px로 확장하여 더 많은 요소 미리 로드)
-    translatedAttr: 'data-tony-translated', // 번역 완료된 요소 속성
-    pendingAttr: 'data-tony-pending',       // 번역 대기 중인 요소 속성
-    sourceAttr: 'data-tony-source',         // 원본 텍스트 저장 속성
-    preloadThreshold: 0.01,  // 요소가 보이는 기준 임계값 (1%만 보여도 로드)
-    batchSize: 25,           // 배치당 항목 수 (감소시켜 부하 완화)
-    maxConcurrentBatches: 2, // 최대 동시 실행 배치 수 (감소시켜 부하 완화)
-    translateFullPage: true, // 전체 페이지 번역 모드 활성화
-    immediateTranslation: true, // 즉시 번역 모드 활성화
-    observeAllOnInit: true,  // 초기화 시 모든 요소 관찰 (활성화)
-    autoRefresh: true,       // 일정 시간마다 새로운 요소 자동 검색
-    requestDelay: 500        // 번역 요청 간 지연 (ms) - 추가된 설정
+    rootMargin: '200px',     // 관찰 영역 감소 (500px→200px)
+    translatedAttr: 'data-tony-translated',
+    pendingAttr: 'data-tony-pending',
+    sourceAttr: 'data-tony-source',
+    preloadThreshold: 0.1,   // 로드 임계값 증가 (0.01→0.1)
+    batchSize: 10,           // 배치 크기 감소 (25→10)
+    maxConcurrentBatches: 1, // 동시 배치 수 감소 (2→1)
+    translateFullPage: false, // 전체 페이지 번역 비활성화 (true→false)
+    immediateTranslation: false, // 즉시 번역 비활성화 (true→false)
+    observeAllOnInit: false, // 초기화 시 전체 관찰 비활성화 (true→false)
+    autoRefresh: true,
+    requestDelay: 1500       // 요청 간 지연 증가 (500→1500)
   };
-  
+    
   // 현재 설정
   let settings = {...DEFAULT_SETTINGS};
   
@@ -172,7 +172,7 @@ const DOMHandler = (function() {
       try {
         // 번역할 텍스트 배열 준비 (배치 크기 제한)
         // 너무 많은 텍스트 노드가 있으면 처음 200개만 처리하여 부하 방지
-        const maxTextNodes = 200;
+        const maxTextNodes = 100;
         const limitedTextNodes = textNodes.length > maxTextNodes ? 
           textNodes.slice(0, maxTextNodes) : textNodes;
         

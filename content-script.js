@@ -75,7 +75,7 @@
       checkModules();
     });
   }
-  
+
   // 확장 프로그램 상태 확인
   function isExtensionContextValid() {
     try {
@@ -300,21 +300,16 @@
       console.warn("[번역 익스텐션] 확장 프로그램 컨텍스트가 무효화됨");
       return "확장 프로그램 컨텍스트 오류. 페이지를 새로고침 해주세요.";
     }
-    
+
     // 모듈 로드 확인
     try {
       await ensureModulesLoaded();
-    } catch (error) {
-      console.error("[번역 익스텐션] 모듈 로드 오류:", error);
-      return "필요한 모듈을 로드할 수 없습니다.";
-    }
-    
-    // 설정 로드 (필요시)
-    if (!AppState.settings) {
-      await loadSettings();
-    }
-    
-    try {
+
+      // 설정 로드 (필요시)
+      if (!AppState.settings) {
+        await loadSettings();
+      }
+
       // 번역 시작
       if (window.DOMHandler) {
         // 기존 번역 상태 초기화
@@ -337,8 +332,8 @@
         throw new Error("DOMHandler 모듈이 로드되지 않았습니다.");
       }
     } catch (error) {
-      console.error("[번역 익스텐션] 번역 오류:", error);
-      
+      console.error("[번역 익스텐션] 모듈 로드 오류:", error);
+
       AppState.isTranslating = false;
       return `번역 오류: ${error.message || '알 수 없는 오류'}`;
     }
@@ -379,7 +374,15 @@
   async function initializeApp() {
     try {
       console.log("[번역 익스텐션] 애플리케이션 초기화 시작...");
-      
+
+      // 모듈 존재 여부 먼저 확인 (실제 로드 전에)
+      if (!window.DOMSelector) {
+        console.log("[번역 익스텐션] DOMSelector 모듈이 없습니다. 스크립트를 직접 로드합니다.");
+        
+          // 필요시 여기서 스크립트를 동적으로 로드할 수 있음
+          // 하지만 확장 프로그램에서는 manifest.json에서 순서를 조정하는 것이 더 효과적
+      }
+        
       // 모듈 로드 확인을 위해 더 긴 시간 대기
       await ensureModulesLoaded();
       

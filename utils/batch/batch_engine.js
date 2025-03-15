@@ -5,18 +5,18 @@ const BatchEngine = (function() {
     
     // 기본 설정
     const DEFAULT_SETTINGS = {
-      batchSize: 40,              // 배치당 최대 항목 수
-      maxConcurrentBatches: 3,    // 최대 동시 실행 배치 수
-      retryCount: 2,              // 실패 시 재시도 횟수
-      retryDelay: 1000,           // 재시도 간 지연 시간(ms)
-      priorityThreshold: 0.9,     // 우선순위 기준 (0.9 = 상위 90%)
-      useCache: true,             // 캐시 사용 여부
-      autoDeduplication: true,    // 자동 중복 제거 여부
-      progressInterval: 500,      // 진행 상태 업데이트 간격(ms)
-      abortOnError: false,        // 오류 발생 시 중단 여부
-      timeout: 30000              // 배치 처리 타임아웃(ms)
+        batchSize: 20,              // 배치 크기 감소 (40→20)
+        maxConcurrentBatches: 1,    // 동시 실행 배치 수 감소 (3→1)
+        retryCount: 1,              // 재시도 횟수 감소 (2→1)
+        retryDelay: 3000,           // 재시도 지연 시간 증가 (1000→3000)
+        priorityThreshold: 0.9,
+        useCache: true,
+        autoDeduplication: true,
+        progressInterval: 1000,     // 진행 상태 업데이트 간격 증가 (500→1000)
+        abortOnError: false,
+        timeout: 45000              // 타임아웃 증가 (30000→45000)
     };
-    
+        
     // 현재 설정
     let settings = {...DEFAULT_SETTINGS};
     

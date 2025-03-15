@@ -31,9 +31,9 @@
         "utils/translator-service.js",
         "utils/ui-manager.js",
         "utils/dom/dom-handler.js",
-        "content-script.js"
+        "content-script.js"  
       ],
-      "run_at": "document_end"
+      "run_at": "document_idle"  
     }
   ],
   "action": {

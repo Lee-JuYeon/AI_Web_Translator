@@ -3,21 +3,21 @@
 const TranslatorService = (function() {
   'use strict';
   
-  // 기본 설정
+  // translator-service.js - 설정 부분 수정
   const DEFAULT_SETTINGS = {
     workerEndpoint: 'https://translate-worker.redofyear2.workers.dev',
-    targetLang: 'ko',  // 대상 언어 (한국어)
+    targetLang: 'ko',
     separator: "||TRANSLATE_SEPARATOR||",
-    maxRetryCount: 2,  // 오류 발생 시 최대 재시도 횟수
-    retryDelay: 2000,  // 재시도 사이의 지연 시간(ms) - 증가
-    timeout: 30000,    // 요청 타임아웃(ms) - 증가
-    forceTranslation: false, // 캐시된 결과가 있어도 강제로 번역
-    useFallbackApi: true,   // 기본 API 실패 시 대체 API 사용
-    minBatchSize: 5,    // 최소 배치 크기
-    maxBatchSize: 50,   // 최대 배치 크기 - 감소
-    requestLimit: 10,   // 10초당 최대 요청 수 - 추가
-    requestWindow: 10000, // 요청 제한 윈도우(ms) - 추가
-    rateLimitDelay: 5000 // 속도 제한 시 지연 시간(ms) - 추가
+    maxRetryCount: 1,        // 재시도 횟수 줄임 (2→1)
+    retryDelay: 5000,        // 재시도 지연 시간 증가 (2000→5000)
+    timeout: 30000,
+    forceTranslation: false,
+    useFallbackApi: true,
+    minBatchSize: 5,
+    maxBatchSize: 20,        // 배치 크기 감소 (50→20)
+    requestLimit: 3,         // 요청 제한 수 감소 (10→3)
+    requestWindow: 15000,    // 요청 제한 시간 증가 (10000→15000)
+    rateLimitDelay: 10000    // 속도 제한 지연 시간 증가 (5000→10000)
   };
   
   // 현재 설정
@@ -391,6 +391,13 @@ const TranslatorService = (function() {
       if (!texts || !Array.isArray(texts) || texts.length === 0) {
         return [];
       }
+
+      // 빈 문자열 필터링
+      texts = texts.filter(text => typeof text === 'string' && text.trim() !== '');
+    
+      if (texts.length === 0) {
+        return [];
+      }
       
       // 활성 요청 상태 업데이트
       state.activeRequests++;
@@ -431,7 +438,8 @@ const TranslatorService = (function() {
           }
           
           // 429 오류 (Too Many Requests)일 경우 속도 제한 활성화
-          if (response.status === 429 || text.includes("KV put() limit exceeded")) {
+          if (response.status === 429 || 
+            (errorMessage && errorMessage.includes("KV put() limit exceeded"))) {
             console.warn("[번역 익스텐션] API 속도 제한 감지됨:", errorMessage);
             // 메모리 내 임시 캐시 사용 전환
             console.warn("[번역 익스텐션] 서버 한도 감지, 로컬 캐싱으로 전환");
@@ -467,6 +475,24 @@ const TranslatorService = (function() {
               ...options,
               retryCount: options.retryCount + 1
             });
+          }
+
+          // API 오류 발생 시 복구 로직
+          if (response.status >= 400) {
+            // 서버 오류인 경우 (429, 500 등)
+            console.log(`[번역 익스텐션] API 오류 (${response.status}), 로컬 캐싱으로 전환`);
+            
+            // API 사용 중지 플래그 설정 (임시)
+            state.useServerAPI = false;
+            
+            // 일정 시간 후 API 재시도 설정
+            setTimeout(() => {
+              state.useServerAPI = true;
+              console.log('[번역 익스텐션] API 연결 재시도');
+            }, 60000); // 1분 후 재시도
+            
+            // 현재 요청은 실패 처리하고 원본 반환
+            return texts;
           }
           
           // 대체 API 사용 가능한 경우 (메인 API 실패 시)
