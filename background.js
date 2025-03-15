@@ -8,12 +8,9 @@
     contentScripts: [
       "utils/cache-manager.js",
       "utils/usage-manager.js", 
-      "utils/dom/dom-selector.js",
-      "utils/dom/dom-observer.js",
-      "utils/dom/dom-manipulator.js",
-      "utils/batch/batch_engine.js",
+      "utils/dom-handler.js",
       "utils/translator-service.js",
-      "utils/dom/dom-handler.js",
+      "utils/ui-manager.js",
       "content-script.js"
     ]
   };
@@ -104,47 +101,44 @@
   
   // 컨텐츠 스크립트 로드 및 메시지 전송
   function loadContentScriptsAndTranslate(tabId) {
-    // Promise 기반으로 변경
-    const loadScript = (script) => {
-      return new Promise((resolve, reject) => {
-        chrome.scripting.executeScript({
-          target: { tabId: tabId },
-          files: [script]
-        }).then(resolve).catch(reject);
-      });
-    };
-    
-    // 모든 스크립트 순차적 로드
-    async function loadAllScripts() {
-      for (const script of APP_CONFIG.contentScripts) {
-        try {
-          console.log(`[번역 익스텐션] 스크립트 로드 중: ${script}`);
-          await loadScript(script);
-          
-          // 각 스크립트 로드 후 짧은 지연 추가 (초기화 시간 제공)
-          await new Promise(resolve => setTimeout(resolve, 50));
-        } catch (error) {
-          console.error(`[번역 익스텐션] 스크립트 로드 오류 (${script}):`, error);
-          // 오류가 있어도 계속 진행
-        }
+    // 스크립트를 순차적으로 로드
+    const loadScriptSequentially = (index = 0) => {
+      if (index >= APP_CONFIG.contentScripts.length) {
+        // 모든 스크립트 로드 완료 후 번역 요청
+        chrome.tabs.sendMessage(tabId, { action: "translatePage" });
+        return;
       }
       
-      // 모든 스크립트 로드 후 추가 대기 시간 (초기화 완료를 위해)
-      await new Promise(resolve => setTimeout(resolve, 200));
-      
-      // 번역 요청
-      chrome.tabs.sendMessage(tabId, { action: "translatePage" });
-    }
-    
+      chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        files: [APP_CONFIG.contentScripts[index]]
+      }).then(() => {
+        // 다음 스크립트 로드
+        loadScriptSequentially(index + 1);
+      }).catch((err) => {
+        console.error(`${APP_CONFIG.contentScripts[index]} 실행 실패:`, err);
+        
+        // 오류가 발생해도 계속 진행 (가능한 경우)
+        if (index + 1 < APP_CONFIG.contentScripts.length) {
+          loadScriptSequentially(index + 1);
+        } else {
+          // 최선의 노력으로 번역 시도
+          try {
+            chrome.tabs.sendMessage(tabId, { action: "translatePage" });
+          } catch (e) {
+            console.error("번역 요청 실패:", e);
+          }
+        }
+      });
+    };
+
     // content-script가 이미 로드되었는지 확인
     chrome.tabs.sendMessage(tabId, { action: "ping" }, response => {
       const hasError = chrome.runtime.lastError;
       
       if (hasError || !response) {
         // 순차적으로 스크립트 로드 시작
-        loadAllScripts().catch(error => {
-          console.error("[번역 익스텐션] 스크립트 로드 및 실행 오류:", error);
-        });
+        loadScriptSequentially();
       } else {
         // 이미 로드된 경우 바로 번역 요청
         chrome.tabs.sendMessage(tabId, { action: "translatePage" });
