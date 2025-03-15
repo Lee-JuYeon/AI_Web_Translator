@@ -9,51 +9,67 @@
   }
   
   // 필요한 모듈 로드 확인 함수
-  function ensureModulesLoaded(maxAttempts = 10, delay = 500) {
+  function ensureModulesLoaded(maxAttempts = 20, delay = 100) { // 더 짧은 간격으로 더 많은 시도
     return new Promise((resolve, reject) => {
       let attempts = 0;
       
       function checkModules() {
-        // 각 모듈 로드 확인
-        const modulesStatus = {
-          DOMSelector: !!window.DOMSelector,
-          DOMObserver: !!window.DOMObserver,
-          DOMManipulator: !!window.DOMManipulator,
-          BatchEngine: !!window.BatchEngine,
-          TranslatorService: !!window.TranslatorService,
-          DOMHandler: !!window.DOMHandler
-        };
-
+        try {
+          // 먼저 DOMSelector 확인
+          if (!window.DOMSelector) {
+            throw new Error("DOMSelector 모듈이 로드되지 않았습니다.");
+          }
+          
+          // 각 모듈 로드 확인 (존재 여부 + 실제 객체인지 확인)
+          const modulesStatus = {
+            DOMSelector: window.DOMSelector && typeof window.DOMSelector === 'object',
+            DOMObserver: window.DOMObserver && typeof window.DOMObserver === 'object',
+            DOMManipulator: window.DOMManipulator && typeof window.DOMManipulator === 'object',
+            BatchEngine: window.BatchEngine && typeof window.BatchEngine === 'object',
+            TranslatorService: window.TranslatorService && typeof window.TranslatorService === 'object',
+            DOMHandler: window.DOMHandler && typeof window.DOMHandler === 'object'
+          };
+  
           // 모든 모듈이 로드되었는지 확인
-        const allLoaded = Object.values(modulesStatus).every(status => status);
-        
-        if (allLoaded) {
-          console.log("[번역 익스텐션] 필요한 모든 모듈이 로드되었습니다.");
-          resolve(true);
-          return;
-        }
-        
-        attempts++;
-        if (attempts >= maxAttempts) {
-          // 로드되지 않은 모듈들 목록화
-          const missingModules = Object.entries(modulesStatus)
-            .filter(([_, loaded]) => !loaded)
-            .map(([name]) => name);
+          const allLoaded = Object.values(modulesStatus).every(status => status);
+          
+          if (allLoaded) {
+            console.log("[번역 익스텐션] 필요한 모든 모듈이 로드되었습니다.");
+            resolve(true);
+            return;
+          }
+          
+          // 아직 로드되지 않은 모듈이 있음
+          attempts++;
+          if (attempts >= maxAttempts) {
+            // 로드되지 않은 모듈들 목록화
+            const missingModules = Object.entries(modulesStatus)
+              .filter(([_, loaded]) => !loaded)
+              .map(([name]) => name);
+              
+            console.error(`[번역 익스텐션] 다음 모듈들이 로드되지 않았습니다: ${missingModules.join(', ')}`);
             
-          console.error(`[번역 익스텐션] 다음 모듈들이 로드되지 않았습니다: ${missingModules.join(', ')}`);
+            // 각 모듈 상태 로깅
+            Object.entries(modulesStatus).forEach(([name, loaded]) => {
+              console.log(`${name}: ${loaded}`);
+            });
+            
+            reject(new Error("모듈 로드 실패"));
+            return;
+          }
           
-          // 각 모듈 상태 로깅
-          Object.entries(modulesStatus).forEach(([name, loaded]) => {
-            console.log(`${name}: ${loaded}`);
-          });
-          
-          reject(new Error("모듈 로드 실패"));
-          return;
+          console.log(`[번역 익스텐션] 모듈 로드 대기 중... (시도 ${attempts}/${maxAttempts})`);
+          // 다시 시도
+          setTimeout(checkModules, delay);
+        } catch (error) {
+          console.error("[번역 익스텐션] 모듈 확인 중 오류:", error);
+          attempts++;
+          if (attempts >= maxAttempts) {
+            reject(error);
+          } else {
+            setTimeout(checkModules, delay);
+          }
         }
-        
-        console.log(`[번역 익스텐션] 모듈 로드 대기 중... (시도 ${attempts}/${maxAttempts})`);
-        // 다시 시도
-        setTimeout(checkModules, delay);
       }
       
       checkModules();

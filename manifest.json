@@ -22,9 +22,9 @@
     {
       "matches": ["<all_urls>"],
       "js": [
+        "utils/dom/dom-selector.js",  
         "utils/cache-manager.js",
         "utils/usage-manager.js",
-        "utils/dom/dom-selector.js",
         "utils/dom/dom-observer.js", 
         "utils/dom/dom-manipulator.js",
         "utils/batch/batch_engine.js",

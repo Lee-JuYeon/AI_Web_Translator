@@ -5,14 +5,13 @@ const DOMSelector = (function() {
     
     // 내부 설정 (기본값)
     const DEFAULT_SETTINGS = {
-      minTextLength: 2,
-      textContainerSelector: 'p, h1, h2, h3, h4, h5, h6, li, span, a, td, th, caption, label, button, div:not(:empty), article, section, strong, em, blockquote, figcaption, cite, summary, time, small, header, footer, nav, aside, main, pre, code, address',
-      // 와일드카드(*) 문자를 제거하고 구체적인 선택자로 변경
-      ignoreSelector: 'script, style, noscript, code[class^="language-"], pre[class^="language-"], .no-translate, [data-no-translate], [translate="no"]',
-      translatedAttr: 'data-tony-translated',
-      pendingAttr: 'data-tony-pending',
-      sourceAttr: 'data-tony-source',
-      additionalSelector: '.text, .title, .headline, .desc, .content, .caption, .summary, .article-txt, .article-tit'
+        minTextLength: 2,
+        textContainerSelector: 'p, h1, h2, h3, h4, h5, h6, li, span, a, td, th, caption, label, button, div:not(:empty), article, section, strong, em, blockquote, figcaption, cite, summary, time, small, header, footer, nav, aside, main, pre, code, address',
+        ignoreSelector: 'script, style, noscript, code[class^="language-"], pre[class^="language-"], .no-translate, [data-no-translate], [translate="no"]',
+        translatedAttr: 'data-tony-translated',
+        pendingAttr: 'data-tony-pending',
+        sourceAttr: 'data-tony-source',
+        additionalSelector: '.text, .title, .headline, .desc, .content, .caption, .summary, .article-txt, .article-tit'
     };
     
     // 현재 설정
@@ -24,15 +23,15 @@ const DOMSelector = (function() {
      * @returns {boolean} - 유효성 여부
      */
     function isValidSelector(selector) {
-      try {
-        // 선택자 유효성 테스트
-        document.createDocumentFragment().querySelector(selector);
-        return true;
-      } catch (error) {
-        console.warn(`[번역 익스텐션] 유효하지 않은 선택자: ${selector}`, error);
-        return false;
-      }
+        try {
+          document.createDocumentFragment().querySelector(selector);
+          return true;
+        } catch (error) {
+          console.warn(`[번역 익스텐션] 유효하지 않은 선택자: ${selector}`, error);
+          return false;
+        }
     }
+      
     
     /**
      * 요소가 텍스트 컨테이너인지 확인
@@ -474,27 +473,21 @@ const DOMSelector = (function() {
       }
     }
     
-    // dom-selector.js 끝부분
-    if (typeof window !== 'undefined') {
-        window.DOMSelector = DOMSelector;
-        console.log('[번역 익스텐션] DOMSelector 모듈 등록됨');
-    }
+    // 모든 함수를 전역 객체에 직접 할당
+    window.DOMSelector.isValidSelector = isValidSelector;
+    window.DOMSelector.isTextContainer = isTextContainer;
+    window.DOMSelector.hasParentMatching = hasParentMatching;
+    window.DOMSelector.extractTextNodesFromElement = extractTextNodesFromElement;
+    window.DOMSelector.findTextContainers = findTextContainers;
+    window.DOMSelector.findElements = findElements;
+    window.DOMSelector.findElement = findElement;
+    window.DOMSelector.extractAllTextNodes = extractAllTextNodes;
+    window.DOMSelector.updateSettings = updateSettings;
+    window.DOMSelector.getSettings = getSettings;
+    window.DOMSelector.resetAllTranslationAttributes = resetAllTranslationAttributes;
     
-    // 공개 API
-    return {
-      isTextContainer,
-      hasParentMatching,
-      extractTextNodesFromElement,
-      findTextContainers,
-      findElements,
-      findElement,
-      extractAllTextNodes,
-      updateSettings,
-      getSettings,
-      resetAllTranslationAttributes,
-      isValidSelector
-    };
+    console.log('[번역 익스텐션] DOMSelector 모듈 등록됨');
   })();
   
   // 모듈 내보내기
-  window.DOMSelector = DOMSelector;
+//   window.DOMSelector = DOMSelector;
