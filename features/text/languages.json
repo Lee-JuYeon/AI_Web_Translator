@@ -1,0 +1,84 @@
+{
+    "languages": [
+      {
+        "code": "ko",
+        "name": "한국어",
+        "native": "한국어"
+      },
+      {
+        "code": "en",
+        "name": "영어",
+        "native": "English"
+      },
+      {
+        "code": "ja",
+        "name": "일본어",
+        "native": "日本語"
+      },
+      {
+        "code": "zh",
+        "name": "중국어",
+        "native": "中文"
+      },
+      {
+        "code": "fr",
+        "name": "프랑스어",
+        "native": "Français"
+      },
+      {
+        "code": "de",
+        "name": "독일어",
+        "native": "Deutsch"
+      },
+      {
+        "code": "es",
+        "name": "스페인어",
+        "native": "Español"
+      },
+      {
+        "code": "ru",
+        "name": "러시아어",
+        "native": "Русский"
+      },
+      {
+        "code": "pt",
+        "name": "포르투갈어",
+        "native": "Português"
+      },
+      {
+        "code": "it",
+        "name": "이탈리아어",
+        "native": "Italiano"
+      },
+      {
+        "code": "ar",
+        "name": "아랍어",
+        "native": "العربية"
+      },
+      {
+        "code": "nl",
+        "name": "네덜란드어",
+        "native": "Nederlands"
+      },
+      {
+        "code": "pl",
+        "name": "폴란드어",
+        "native": "Polski"
+      },
+      {
+        "code": "tr",
+        "name": "터키어",
+        "native": "Türkçe"
+      },
+      {
+        "code": "vi",
+        "name": "베트남어",
+        "native": "Tiếng Việt"
+      },
+      {
+        "code": "th",
+        "name": "태국어",
+        "native": "ไทย"
+      }
+    ]
+  }

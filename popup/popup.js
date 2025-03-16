@@ -1,38 +1,77 @@
-// popup/popup.js - UI 로직 분리 버전
+// popup/popup.js - 최적화된 버전
+let languages = []; // 언어 리스트 저장용 변수
 
 // 문서가 로드되면 실행
 document.addEventListener('DOMContentLoaded', async function() {
-  // 필요한 모듈이 로드되었는지 확인
-  if (!window.UsageManager || !window.UIManager) {
-    console.error("[번역 익스텐션] 필요한 모듈이 로드되지 않았습니다. 로드 순서를 확인하세요.");
-    console.log("UsageManager:", !!window.UsageManager);
-    console.log("UIManager:", !!window.UIManager);
-    
-    // 기본 UI 표시 (대비책)
-    updateUIWithDefaultValues();
-    setupEventListeners();
-    return;
-  }
-  
   try {
+    // 필요한 모듈 확인
+    checkRequiredModules();
+    
+    // 언어 리스트 로드
+    await loadLanguages();
+    
     // 사용량 통계 가져오기
-    const stats = await UsageManager.getUsageStats();
+    const stats = await getUsageStats();
     
     // 사용량 UI 업데이트
-    UIManager.updateUsageUI(stats);
-  } catch (error) {
-    console.error("UsageManager 접근 오류:", error);
+    updateUsageUI(stats);
     
-    // 오류 발생 시 기본 UI 표시
+    // 이벤트 리스너 설정
+    setupEventListeners();
+    
+    // 저장된 설정 로드
+    loadSettings();
+  } catch (error) {
+    console.error("초기화 오류:", error);
     updateUIWithDefaultValues();
   }
-  
-  // 이벤트 리스너 설정
-  setupEventListeners();
-  
-  // 저장된 설정 로드
-  loadSettings();
 });
+
+/**
+ * 언어 리스트 로드 함수
+ */
+async function loadLanguages() {
+  try {
+    const response = await fetch('../languages.json');
+    const data = await response.json();
+    languages = data.languages || [];
+    
+    // 언어 선택 드롭다운 채우기
+    const targetLangSelect = document.getElementById('targetLang');
+    if (targetLangSelect) {
+      // 기존 옵션 제거
+      targetLangSelect.innerHTML = '';
+      
+      // 새 옵션 추가
+      languages.forEach(lang => {
+        const option = document.createElement('option');
+        option.value = lang.code;
+        option.textContent = lang.native; // 원어 이름 사용
+        targetLangSelect.appendChild(option);
+      });
+    }
+  } catch (error) {
+    console.error("언어 리스트 로드 오류:", error);
+    // 오류 시 기본 옵션 추가
+    const targetLangSelect = document.getElementById('targetLang');
+    if (targetLangSelect) {
+      targetLangSelect.innerHTML = '<option value="ko">한국어</option>';
+    }
+  }
+}
+
+/**
+ * 필요한 모듈 체크
+ */
+function checkRequiredModules() {
+  const requiredModules = ['TranslatorService', 'UsageManager', 'UIManager', 'CacheManager'];
+  
+  for (const moduleName of requiredModules) {
+    if (!window[moduleName]) {
+      console.error(`필요한 모듈이 로드되지 않았습니다: ${moduleName}`);
+    }
+  }
+}
 
 /**
  * 기본값으로 UI 업데이트 (오류 발생 시)
@@ -43,16 +82,10 @@ function updateUIWithDefaultValues() {
     tokensUsed: 0,
     limit: 15000,
     remaining: 15000,
-    percentage: 0,
-    lastReset: new Date().toISOString()
+    percentage: 0
   };
   
-  // UIManager가 있으면 사용, 없으면 레거시 함수 사용
-  if (window.UIManager) {
-    UIManager.updateUsageUI(defaultStats);
-  } else {
-    updateUsageUI(defaultStats);
-  }
+  updateUsageUI(defaultStats);
 }
 
 /**
@@ -73,8 +106,10 @@ function setupEventListeners() {
     chrome.tabs.create({ url: 'https://your-payment-page.com' });
   });
   
-  // 설정 저장 버튼 이벤트 리스너
-  document.getElementById('saveSettings').addEventListener('click', saveSettings);
+  // 번역 언어 변경 이벤트 리스너
+  document.getElementById('targetLang').addEventListener('change', function() {
+    saveSettings();
+  });
   
   // 개인정보처리방침 링크
   document.getElementById('privacyLink').addEventListener('click', function(e) {
@@ -94,30 +129,17 @@ function setupEventListeners() {
  */
 function saveSettings() {
   const settings = {
-    targetLang: document.getElementById('targetLang').value,
-    autoTranslate: document.getElementById('autoTranslate').checked,
-    features: {
-      translateText: document.getElementById('translateText').checked,
-      translateImage: document.getElementById('translateImage').checked
-    }
+    targetLang: document.getElementById('targetLang').value
   };
   
   chrome.storage.sync.set({ settings }, function() {
-    // 저장 완료 표시
-    const saveBtn = document.getElementById('saveSettings');
-    
-    // UIManager가 있으면 사용
-    if (window.UIManager) {
-      UIManager.showSettingsSaved(saveBtn, "설정 저장", "저장됨!");
-    } else {
-      // 레거시 코드
-      const originalText = saveBtn.textContent;
-      saveBtn.textContent = '저장됨!';
-      
-      setTimeout(() => {
-        saveBtn.textContent = originalText;
-      }, 1500);
-    }
+    // 저장된 설정을 활성 탭에 전달
+    chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+      chrome.tabs.sendMessage(tabs[0].id, { 
+        action: "updateSettings", 
+        settings: settings 
+      });
+    });
   });
 }
 
@@ -131,32 +153,99 @@ function loadSettings() {
     const { settings } = data;
     
     // 설정 값 적용
-    document.getElementById('targetLang').value = settings.targetLang || 'ko';
-    document.getElementById('autoTranslate').checked = settings.autoTranslate || false;
+    const targetLangSelect = document.getElementById('targetLang');
     
-    // 기능 설정 적용
-    if (settings.features) {
-      document.getElementById('translateText').checked = settings.features.translateText !== false;
+    if (settings.targetLang) {
+      // 해당 언어 옵션이 존재하는지 확인
+      const optionExists = Array.from(targetLangSelect.options).some(
+        option => option.value === settings.targetLang
+      );
       
-      const translateImageCheckbox = document.getElementById('translateImage');
-      if (translateImageCheckbox) {
-        translateImageCheckbox.checked = settings.features.translateImage || false;
+      if (optionExists) {
+        targetLangSelect.value = settings.targetLang;
       }
     }
   });
 }
 
 /**
- * 사용량 UI 업데이트 함수 (UIManager가 없을 때 대비책)
- * @deprecated UIManager로 대체됨
+ * 사용량 통계 가져오기
+ */
+async function getUsageStats() {
+  return new Promise((resolve, reject) => {
+    try {
+      if (window.UsageManager && typeof window.UsageManager.getUsageStats === 'function') {
+        window.UsageManager.getUsageStats()
+          .then(stats => resolve(stats))
+          .catch(err => {
+            console.error("사용량 통계 가져오기 오류:", err);
+            reject(err);
+          });
+      } else {
+        chrome.runtime.sendMessage({ action: "getUsageStats" }, function(response) {
+          if (chrome.runtime.lastError) {
+            reject(chrome.runtime.lastError);
+            return;
+          }
+          
+          if (response && response.usage) {
+            const usage = response.usage;
+            const subscription = response.subscription || 'FREE';
+            
+            const limit = getSubscriptionLimit(subscription);
+            const tokensUsed = usage.tokensUsed || 0;
+            const remaining = Math.max(0, limit - tokensUsed);
+            const percentage = limit > 0 ? Math.min(100, Math.round((tokensUsed / limit) * 100)) : 0;
+            
+            resolve({
+              subscription,
+              tokensUsed,
+              limit,
+              remaining,
+              percentage
+            });
+          } else {
+            reject(new Error("사용량 데이터가 없습니다"));
+          }
+        });
+      }
+    } catch (error) {
+      console.error("사용량 통계 요청 오류:", error);
+      reject(error);
+    }
+  });
+}
+
+/**
+ * 구독 등급에 따른 토큰 한도 가져오기
+ */
+function getSubscriptionLimit(subscription) {
+  switch (subscription) {
+    case 'BASIC':
+      return 100000;
+    case 'FREE':
+    default:
+      return 15000;
+  }
+}
+
+/**
+ * 사용량 UI 업데이트 함수
  */
 function updateUsageUI(stats) {
   // 등급 표시
   const subscriptionElement = document.getElementById('subscription-level');
   if (subscriptionElement) {
-    let subscriptionName = "무료";
-    if (stats.subscription === 'BASIC') subscriptionName = "기본 ($5/월)";
-    if (stats.subscription === 'PREMIUM') subscriptionName = "프리미엄 ($10/월)";
+    let subscriptionName;
+    
+    switch (stats.subscription) {
+      case 'BASIC':
+        subscriptionName = "기본 ($5/월)";
+        break;
+      case 'FREE':
+      default:
+        subscriptionName = "무료";
+    }
     
     subscriptionElement.textContent = subscriptionName;
   }
@@ -164,66 +253,37 @@ function updateUsageUI(stats) {
   // 프로그레스 바 업데이트
   const progressBar = document.getElementById('usage-progress');
   if (progressBar) {
-    if (stats.subscription === 'PREMIUM') {
-      progressBar.style.width = '100%';
-      progressBar.style.backgroundColor = '#4CAF50';
+    progressBar.style.width = `${stats.percentage}%`;
+    
+    // 경고 색상 (80% 이상이면 주황색, 95% 이상이면 빨간색)
+    if (stats.percentage >= 95) {
+      progressBar.style.backgroundColor = '#f44336';
+    } else if (stats.percentage >= 80) {
+      progressBar.style.backgroundColor = '#ff9800';
     } else {
-      progressBar.style.width = `${stats.percentage}%`;
-      
-      // 경고 색상 (80% 이상이면 주황색, 95% 이상이면 빨간색)
-      if (stats.percentage >= 95) {
-        progressBar.style.backgroundColor = '#f44336';
-      } else if (stats.percentage >= 80) {
-        progressBar.style.backgroundColor = '#ff9800';
-      } else {
-        progressBar.style.backgroundColor = '#2196F3';
-      }
+      progressBar.style.backgroundColor = '#2196F3';
     }
   }
   
   // 사용량 텍스트 업데이트
   const usageText = document.getElementById('usage-text');
   if (usageText) {
-    if (stats.subscription === 'PREMIUM') {
-      usageText.textContent = `무제한 사용 가능`;
-    } else {
-      usageText.textContent = `${stats.tokensUsed.toLocaleString()} / ${stats.limit.toLocaleString()} 토큰 사용`;
-    }
+    usageText.textContent = `${stats.tokensUsed.toLocaleString()} / ${stats.limit.toLocaleString()} 토큰 사용`;
   }
   
   // 남은 양 업데이트
   const remainingText = document.getElementById('remaining-text');
   if (remainingText) {
-    if (stats.subscription === 'PREMIUM') {
-      remainingText.textContent = '무제한';
+    remainingText.textContent = `남은 토큰: ${stats.remaining.toLocaleString()}`;
+  }
+  
+  // 업그레이드 버튼 텍스트 업데이트
+  const upgradeButton = document.getElementById('upgradeButton');
+  if (upgradeButton) {
+    if (stats.subscription === 'FREE') {
+      upgradeButton.textContent = '구독하기';
     } else {
-      remainingText.textContent = `남은 토큰: ${stats.remaining.toLocaleString()}`;
-    }
-  }
-  
-  // 다음 리셋 날짜 표시
-  const resetText = document.getElementById('reset-date');
-  if (resetText) {
-    const resetDate = new Date(stats.lastReset);
-    resetDate.setMonth(resetDate.getMonth() + 1);
-    
-    const formattedDate = `${resetDate.getFullYear()}년 ${resetDate.getMonth() + 1}월 ${resetDate.getDate()}일`;
-    resetText.textContent = `다음 리셋: ${formattedDate}`;
-  }
-  
-  // 프리미엄 기능 상태 업데이트
-  const translateImageCheckbox = document.getElementById('translateImage');
-  if (translateImageCheckbox) {
-    translateImageCheckbox.disabled = stats.subscription !== 'PREMIUM';
-    
-    // 프리미엄 기능의 레이블에 disabled 클래스 추가/제거
-    const translateImageLabel = translateImageCheckbox.nextElementSibling;
-    if (translateImageLabel) {
-      if (stats.subscription === 'PREMIUM') {
-        translateImageLabel.classList.remove('disabled-text');
-      } else {
-        translateImageLabel.classList.add('disabled-text');
-      }
+      upgradeButton.textContent = '구독 관리';
     }
   }
 }

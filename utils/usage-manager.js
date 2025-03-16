@@ -1,4 +1,4 @@
-// utils/usage-manager.js - 에러 방지 개선 버전
+// utils/usage-manager.js - 최적화된 버전
 const UsageManager = (function() {
   'use strict';
   
@@ -14,13 +14,12 @@ const UsageManager = (function() {
   // 회원 등급별 월간 토큰 한도
   const SUBSCRIPTION_LIMITS = {
     FREE: 15000,   // 무료 회원: 약 15,000 토큰 (약 30페이지)
-    BASIC: 100000, // 기본 회원($5): 약 100,000 토큰 (약 200페이지)
-    PREMIUM: -1    // 프리미엄 회원($10): 무제한 (-1)
+    BASIC: 100000  // 기본 회원($5): 약 100,000 토큰 (약 200페이지)
   };
 
   /**
    * 현재 사용자 등급 가져오기
-   * @returns {Promise<string>} - 구독 등급 (FREE, BASIC, PREMIUM)
+   * @returns {Promise<string>} - 구독 등급 (FREE, BASIC)
    */
   async function getCurrentSubscription() {
     try {
@@ -198,11 +197,6 @@ const UsageManager = (function() {
       const subscription = await getCurrentSubscription();
       const limit = SUBSCRIPTION_LIMITS[subscription] || SUBSCRIPTION_LIMITS.FREE;
       
-      // 프리미엄 회원은 무제한
-      if (limit === -1) {
-        return true;
-      }
-      
       const usage = await getCurrentUsage();
       
       // 현재 사용량 + 예상 토큰 <= 한도
@@ -247,8 +241,8 @@ const UsageManager = (function() {
         subscription,
         tokensUsed,
         limit: limit,
-        remaining: limit === -1 ? -1 : Math.max(0, limit - tokensUsed),
-        percentage: limit === -1 ? 0 : Math.min(100, Math.round((tokensUsed / limit) * 100)),
+        remaining: Math.max(0, limit - tokensUsed),
+        percentage: Math.min(100, Math.round((tokensUsed / limit) * 100)),
         lastReset: usage.lastReset || new Date().toISOString()
       };
       
@@ -314,33 +308,8 @@ const UsageManager = (function() {
   }
   
   /**
-   * 남은 토큰 수 계산
-   * @returns {Promise<number>} - 남은 토큰 수 (-1은 무제한)
-   */
-  async function getRemainingTokens() {
-    try {
-      const subscription = await getCurrentSubscription();
-      const limit = SUBSCRIPTION_LIMITS[subscription] || SUBSCRIPTION_LIMITS.FREE;
-      
-      // 프리미엄 회원은 무제한
-      if (limit === -1) {
-        return -1; // 무제한
-      }
-      
-      const usage = await getCurrentUsage();
-      const tokensUsed = typeof usage.tokensUsed === 'number' && !isNaN(usage.tokensUsed) ? 
-        usage.tokensUsed : 0;
-      
-      return Math.max(0, limit - tokensUsed);
-    } catch (error) {
-      console.error("[번역 익스텐션] 남은 토큰 계산 오류:", error);
-      return SUBSCRIPTION_LIMITS.FREE; // 기본 무료 한도 반환
-    }
-  }
-  
-  /**
    * 구독 등급 설정 (결제 처리 후 호출)
-   * @param {string} level - 구독 등급 (FREE, BASIC, PREMIUM)
+   * @param {string} level - 구독 등급 (FREE, BASIC)
    * @returns {Promise<boolean>} - 성공 여부
    */
   async function setSubscription(level) {
@@ -454,7 +423,6 @@ const UsageManager = (function() {
     try {
       switch (subscription) {
         case 'BASIC': return "기본 ($5/월)";
-        case 'PREMIUM': return "프리미엄 ($10/월)";
         case 'FREE':
         default: return "무료";
       }
@@ -464,67 +432,21 @@ const UsageManager = (function() {
     }
   }
   
-  /**
-   * 사용량을 로컬에 캐싱 (성능 최적화)
-   */
-  async function cacheLocalUsage() {
-    try {
-      const stats = await getUsageStats();
-      
-      // 로컬 스토리지에 캐싱 (옵션)
-      if (window.localStorage) {
-        try {
-          localStorage.setItem('usageStats', JSON.stringify({
-            stats,
-            timestamp: Date.now()
-          }));
-        } catch (localStorageError) {
-          console.warn("[번역 익스텐션] 로컬 스토리지 캐싱 오류:", localStorageError);
-        }
-      }
-    } catch (error) {
-      console.error("[번역 익스텐션] 사용량 캐싱 오류:", error);
-    }
-  }
-  
   // 초기화 - 사용량 캐싱 (시작 시 1회)
   try {
-    cacheLocalUsage();
+    getUsageStats();
   } catch (initError) {
     console.error("[번역 익스텐션] 초기 사용량 캐싱 오류:", initError);
-  }
-  
-  // 이벤트 리스너 설정
-  try {
-    window.addEventListener('usage:updated', () => {
-      try {
-        cacheLocalUsage();
-      } catch (error) {
-        console.error("[번역 익스텐션] 사용량 업데이트 이벤트 처리 오류:", error);
-      }
-    });
-    
-    window.addEventListener('subscription:updated', () => {
-      try {
-        cacheLocalUsage();
-      } catch (error) {
-        console.error("[번역 익스텐션] 구독 업데이트 이벤트 처리 오류:", error);
-      }
-    });
-  } catch (listenerError) {
-    console.error("[번역 익스텐션] 이벤트 리스너 설정 오류:", listenerError);
   }
   
   // 공개 API
   return {
     getCurrentSubscription,
-    getCurrentMonth,
     getCurrentUsage,
     recordUsage,
     canTranslate,
     getUsageStats,
     estimateTokens,
-    getRemainingTokens,
     setSubscription,
     checkAndResetMonthlyUsage,
     getLimits,
