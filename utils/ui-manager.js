@@ -1,536 +1,540 @@
-// utils/usage-manager.js - 에러 방지 개선 버전
-const UsageManager = (function() {
+// utils/ui-manager.js - IntersectionObserver 기반 번역 시스템 지원 버전
+const UIManager = (function() {
   'use strict';
   
-  // 초기화 플래그 확인
-  if (window.usageManagerInitialized) {
-    console.log("[번역 익스텐션] UsageManager 이미 초기화됨");
-    return window.UsageManager;
-  }
-  
-  // 초기화 플래그 설정
-  window.usageManagerInitialized = true;
-
-  // 회원 등급별 월간 토큰 한도
-  const SUBSCRIPTION_LIMITS = {
-    FREE: 15000,   // 무료 회원: 약 15,000 토큰 (약 30페이지)
-    BASIC: 100000, // 기본 회원($5): 약 100,000 토큰 (약 200페이지)
-    PREMIUM: -1    // 프리미엄 회원($10): 무제한 (-1)
+  // UI 설정
+  const UI_SETTINGS = {
+    statusTimeout: 2000,        // 상태 메시지 표시 시간 (ms)
+    limitExceededTimeout: 10000, // 한도 초과 알림 표시 시간 (ms)
+    autoHideDelay: 3000,        // 자동 숨김 시간 (ms)
+    progressUpdateInterval: 1000 // 진행 상태 업데이트 간격 (ms)
   };
-
+  
+  // 내부 상태 관리
+  const state = {
+    activeStatusElement: null,
+    statusTimer: null,
+    translationStats: {
+      totalElements: 0,
+      translatedElements: 0,
+      totalTexts: 0,
+      translatedTexts: 0,
+      lastUpdate: Date.now()
+    }
+  };
+  
   /**
-   * 현재 사용자 등급 가져오기
-   * @returns {Promise<string>} - 구독 등급 (FREE, BASIC, PREMIUM)
+   * 번역 진행 상태 표시 UI 생성 및 표시
+   * @param {string} message - 표시할 메시지
+   * @param {boolean} isComplete - 완료 상태 여부
+   * @param {boolean} autoHide - 자동 숨김 여부
+   * @returns {HTMLElement} - 생성된 상태 요소
    */
-  async function getCurrentSubscription() {
-    try {
-      return new Promise((resolve) => {
-        try {
-          chrome.storage.sync.get('subscription', (data) => {
-            try {
-              // 기본값은 무료 회원
-              const subscription = data && data.subscription ? data.subscription : 'FREE';
-              resolve(subscription);
-            } catch (error) {
-              console.error("[번역 익스텐션] 구독 정보 처리 오류:", error);
-              resolve('FREE'); // 오류 시 기본값 반환
-            }
-          });
-        } catch (chromeError) {
-          console.error("[번역 익스텐션] Chrome 스토리지 접근 오류:", chromeError);
-          resolve('FREE'); // 오류 시 기본값 반환
-        }
+  function showTranslationStatus(message, isComplete = false, autoHide = false) {
+    // 기존 타이머 취소
+    if (state.statusTimer) {
+      clearTimeout(state.statusTimer);
+      state.statusTimer = null;
+    }
+    
+    let statusElement = document.getElementById('translation-status-bar');
+    
+    if (!statusElement) {
+      statusElement = document.createElement('div');
+      statusElement.id = 'translation-status-bar';
+      
+      // 스타일 설정
+      Object.assign(statusElement.style, {
+        position: 'fixed',
+        bottom: '20px',
+        right: '20px',
+        padding: '10px 15px',
+        background: isComplete ? '#4CAF50' : '#2196F3',
+        color: 'white',
+        borderRadius: '5px',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+        zIndex: '9999',
+        fontSize: '14px',
+        fontFamily: 'Arial, sans-serif',
+        transition: 'all 0.3s ease',
+        maxWidth: '300px'
       });
-    } catch (error) {
-      console.error("[번역 익스텐션] 구독 정보 가져오기 오류:", error);
-      return 'FREE'; // 오류 시 기본값 반환
+      
+      document.body.appendChild(statusElement);
+      state.activeStatusElement = statusElement;
+    } else {
+      // 완료 상태일 경우 색상 변경
+      if (isComplete) {
+        statusElement.style.background = '#4CAF50';
+      } else {
+        statusElement.style.background = '#2196F3';
+      }
     }
+    
+    statusElement.textContent = message;
+    
+    // 자동 숨김 설정
+    if (autoHide) {
+      state.statusTimer = setTimeout(() => {
+        hideTranslationStatus();
+      }, UI_SETTINGS.autoHideDelay);
+    }
+    
+    return statusElement;
   }
   
   /**
-   * 현재 월 구하기 (yyyy-mm 형식)
-   * @returns {string} - 현재 월 (yyyy-mm)
+   * 번역 상태 UI 숨기기
    */
-  function getCurrentMonth() {
-    try {
-      const date = new Date();
-      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-    } catch (error) {
-      console.error("[번역 익스텐션] 현재 월 계산 오류:", error);
-      // 오류 시 현재 날짜의 문자열 반환
-      const now = new Date();
-      return `${now.getFullYear()}-01`;
-    }
-  }
-  
-  /**
-   * 현재 월 사용량 가져오기
-   * @returns {Promise<Object>} - 사용량 객체
-   */
-  async function getCurrentUsage() {
-    try {
-      return new Promise((resolve) => {
-        try {
-          chrome.storage.sync.get('usage', (data) => {
-            try {
-              // 사용량 데이터가 없으면 초기화
-              if (!data || !data.usage || !data.usage.month || data.usage.month !== getCurrentMonth()) {
-                const newUsage = {
-                  month: getCurrentMonth(),
-                  tokensUsed: 0,
-                  lastReset: new Date().toISOString()
-                };
-                
-                // storage 접근 오류 방지
-                try {
-                  chrome.storage.sync.set({ usage: newUsage }, () => {
-                    if (chrome.runtime.lastError) {
-                      console.warn("[번역 익스텐션] 사용량 저장 오류:", chrome.runtime.lastError);
-                    }
-                  });
-                } catch (storageError) {
-                  console.error("[번역 익스텐션] 스토리지 저장 오류:", storageError);
-                }
-                
-                resolve(newUsage);
-              } else {
-                resolve(data.usage);
-              }
-            } catch (dataError) {
-              console.error("[번역 익스텐션] 사용량 데이터 처리 오류:", dataError);
-              // 오류 시 기본값 반환
-              resolve({
-                month: getCurrentMonth(),
-                tokensUsed: 0,
-                lastReset: new Date().toISOString()
-              });
-            }
-          });
-        } catch (chromeError) {
-          console.error("[번역 익스텐션] 스토리지 접근 오류:", chromeError);
-          // 오류 시 기본값 반환
-          resolve({
-            month: getCurrentMonth(),
-            tokensUsed: 0,
-            lastReset: new Date().toISOString()
-          });
+  function hideTranslationStatus() {
+    const statusElement = document.getElementById('translation-status-bar');
+    if (statusElement) {
+      // 애니메이션 후 제거
+      statusElement.style.opacity = '0';
+      setTimeout(() => {
+        if (statusElement.parentNode) {
+          statusElement.parentNode.removeChild(statusElement);
+          state.activeStatusElement = null;
         }
+      }, 300);
+    }
+    
+    if (state.statusTimer) {
+      clearTimeout(state.statusTimer);
+      state.statusTimer = null;
+    }
+  }
+  
+  /**
+   * 번역 진행 상태 UI 업데이트
+   * @param {Object} stats - 진행 상태 통계
+   */
+  function updateTranslationProgress(stats) {
+    // 상태 통계 업데이트
+    if (stats) {
+      Object.assign(state.translationStats, stats);
+    }
+    
+    // 마지막 업데이트 시간 검사 (너무 빈번한 업데이트 방지)
+    const now = Date.now();
+    if (now - state.translationStats.lastUpdate < UI_SETTINGS.progressUpdateInterval) {
+      return;
+    }
+    
+    state.translationStats.lastUpdate = now;
+    
+    // 진행 상태 메시지 생성
+    let message = "";
+    if (state.translationStats.totalElements > 0) {
+      const elementsPercent = Math.min(
+        100, 
+        Math.round((state.translationStats.translatedElements / state.translationStats.totalElements) * 100)
+      );
+      
+      message = `번역 진행 중: ${state.translationStats.translatedElements}/${state.translationStats.totalElements} 요소 (${elementsPercent}%)`;
+    } else if (state.translationStats.totalTexts > 0) {
+      const textsPercent = Math.min(
+        100, 
+        Math.round((state.translationStats.translatedTexts / state.translationStats.totalTexts) * 100)
+      );
+      
+      message = `번역 진행 중: ${state.translationStats.translatedTexts}/${state.translationStats.totalTexts} 텍스트 (${textsPercent}%)`;
+    } else {
+      message = "번역 진행 중...";
+    }
+    
+    // 진행 상태 UI 업데이트
+    showTranslationStatus(message);
+  }
+  
+  /**
+   * 번역 한도 초과 알림 표시
+   * @param {Function} onUpgradeClick - 업그레이드 버튼 클릭 시 콜백
+   */
+  function showTranslationLimitExceeded(onUpgradeClick) {
+    let limitElement = document.getElementById('translation-limit-exceeded');
+    
+    if (!limitElement) {
+      limitElement = document.createElement('div');
+      limitElement.id = 'translation-limit-exceeded';
+      
+      Object.assign(limitElement.style, {
+        position: 'fixed',
+        top: '20px',
+        right: '20px',
+        padding: '15px 20px',
+        background: '#f44336',
+        color: 'white',
+        borderRadius: '5px',
+        boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
+        zIndex: '9999',
+        fontSize: '14px',
+        fontFamily: 'Arial, sans-serif',
+        textAlign: 'center',
+        maxWidth: '300px'
       });
-    } catch (error) {
-      console.error("[번역 익스텐션] 사용량 가져오기 오류:", error);
-      // 오류 시 기본값 반환
-      return {
-        month: getCurrentMonth(),
-        tokensUsed: 0,
-        lastReset: new Date().toISOString()
-      };
-    }
-  }
-  
-  /**
-   * 토큰 사용량 기록
-   * @param {number} tokens - 사용한 토큰 수
-   * @returns {Promise<Object>} - 업데이트된 사용량 객체
-   */
-  async function recordUsage(tokens) {
-    try {
-      // 토큰 수가 숫자가 아니면 기본값 사용
-      const tokenCount = typeof tokens === 'number' && !isNaN(tokens) ? tokens : 0;
-      if (tokenCount <= 0) {
-        console.warn("[번역 익스텐션] 유효하지 않은 토큰 수:", tokens);
-        return await getCurrentUsage(); // 기존 사용량 반환
-      }
       
-      const usage = await getCurrentUsage();
-      const newTokensUsed = usage.tokensUsed + tokenCount;
+      // 한도 초과 메시지
+      limitElement.innerHTML = `
+        <p><strong>번역 한도 초과!</strong></p>
+        <p>이번 달 번역 한도를 모두 사용했습니다.</p>
+        <p>더 많은 번역을 위해 구독 등급을 업그레이드하세요.</p>
+        <button id="upgrade-subscription" style="
+          background: white;
+          color: #f44336;
+          border: none;
+          padding: 8px 15px;
+          margin-top: 10px;
+          border-radius: 3px;
+          cursor: pointer;
+          font-weight: bold;
+        ">업그레이드</button>
+      `;
       
-      // 새 사용량으로 업데이트
-      const newUsage = {
-        ...usage,
-        tokensUsed: newTokensUsed
-      };
+      document.body.appendChild(limitElement);
       
-      return new Promise((resolve) => {
-        try {
-          chrome.storage.sync.set({ usage: newUsage }, () => {
-            // 크롬 런타임 에러 체크
-            if (chrome.runtime.lastError) {
-              console.warn("[번역 익스텐션] 사용량 저장 오류:", chrome.runtime.lastError);
-            }
-            
-            // 이벤트 발생 (사용량 업데이트)
-            try {
-              window.dispatchEvent(new CustomEvent('usage:updated', {
-                detail: { usage: newUsage }
-              }));
-            } catch (eventError) {
-              console.error("[번역 익스텐션] 이벤트 발생 오류:", eventError);
-            }
-            
-            resolve(newUsage);
-          });
-        } catch (storageError) {
-          console.error("[번역 익스텐션] 스토리지 저장 오류:", storageError);
-          resolve(usage); // 오류 시 기존 사용량 반환
-        }
-      });
-    } catch (error) {
-      console.error("[번역 익스텐션] 사용량 기록 오류:", error);
-      // 오류 발생 시 기본 사용량 객체 반환
-      return {
-        month: getCurrentMonth(),
-        tokensUsed: 0,
-        lastReset: new Date().toISOString()
-      };
-    }
-  }
-  
-  /**
-   * 번역 가능 여부 확인
-   * @param {number} estimatedTokens - 예상 토큰 수
-   * @returns {Promise<boolean>} - 번역 가능 여부
-   */
-  async function canTranslate(estimatedTokens) {
-    try {
-      // 토큰 수가 숫자가 아니면 기본값 사용
-      const tokenCount = typeof estimatedTokens === 'number' && !isNaN(estimatedTokens) ? estimatedTokens : 0;
-      
-      const subscription = await getCurrentSubscription();
-      const limit = SUBSCRIPTION_LIMITS[subscription] || SUBSCRIPTION_LIMITS.FREE;
-      
-      // 프리미엄 회원은 무제한
-      if (limit === -1) {
-        return true;
-      }
-      
-      const usage = await getCurrentUsage();
-      
-      // 현재 사용량 + 예상 토큰 <= 한도
-      const isWithinLimit = (usage.tokensUsed + tokenCount) <= limit;
-      
-      // 한도 초과 시 이벤트 발생
-      if (!isWithinLimit) {
-        try {
-          window.dispatchEvent(new CustomEvent('usage:limit-exceeded', {
-            detail: { 
-              required: tokenCount,
-              available: Math.max(0, limit - usage.tokensUsed)
-            }
-          }));
-        } catch (eventError) {
-          console.error("[번역 익스텐션] 이벤트 발생 오류:", eventError);
-        }
-      }
-      
-      return isWithinLimit;
-    } catch (error) {
-      console.error("[번역 익스텐션] 번역 가능 여부 확인 오류:", error);
-      return true; // 오류 시 기본적으로 번역 허용
-    }
-  }
-  
-  /**
-   * 사용량 통계 가져오기
-   * @returns {Promise<Object>} - 사용량 통계 객체
-   */
-  async function getUsageStats() {
-    try {
-      const subscription = await getCurrentSubscription();
-      const usage = await getCurrentUsage();
-      const limit = SUBSCRIPTION_LIMITS[subscription] || SUBSCRIPTION_LIMITS.FREE;
-      
-      // 토큰 사용량이 숫자가 아니면 0으로 간주
-      const tokensUsed = typeof usage.tokensUsed === 'number' && !isNaN(usage.tokensUsed) ? 
-        usage.tokensUsed : 0;
-      
-      const stats = {
-        subscription,
-        tokensUsed,
-        limit: limit,
-        remaining: limit === -1 ? -1 : Math.max(0, limit - tokensUsed),
-        percentage: limit === -1 ? 0 : Math.min(100, Math.round((tokensUsed / limit) * 100)),
-        lastReset: usage.lastReset || new Date().toISOString()
-      };
-      
-      // 이벤트 발생 (사용량 통계 준비됨)
-      try {
-        window.dispatchEvent(new CustomEvent('usage:stats-ready', {
-          detail: { stats }
-        }));
-      } catch (eventError) {
-        console.error("[번역 익스텐션] 이벤트 발생 오류:", eventError);
-      }
-      
-      return stats;
-    } catch (error) {
-      console.error("[번역 익스텐션] 사용량 통계 가져오기 오류:", error);
-      
-      // 오류 시 기본 통계 반환
-      return {
-        subscription: 'FREE',
-        tokensUsed: 0,
-        limit: SUBSCRIPTION_LIMITS.FREE,
-        remaining: SUBSCRIPTION_LIMITS.FREE,
-        percentage: 0,
-        lastReset: new Date().toISOString()
-      };
-    }
-  }
-  
-  /**
-   * 토큰 수 추정 (영어 기준)
-   * @param {string[]} texts - 번역할 텍스트 배열
-   * @returns {number} - 예상 토큰 수
-   */
-  function estimateTokens(texts) {
-    try {
-      // 영어 기준 1단어 = 약 1.3 토큰
-      const tokenRatio = 1.3;
-      
-      // 텍스트 배열이 아니면 빈 배열로 간주
-      if (!Array.isArray(texts)) {
-        console.warn("[번역 익스텐션] 유효하지 않은 texts 배열:", texts);
-        return 0;
-      }
-      
-      // 모든 텍스트의 단어 수 계산
-      const wordCount = texts.reduce((count, text) => {
-        if (typeof text !== 'string') {
-          return count; // 문자열이 아닌 항목은 건너뜀
-        }
-        
-        // 단어 수 추정 (공백으로 분리)
-        return count + text.split(/\s+/).length;
-      }, 0);
-      
-      // 토큰 수 추정 및 10% 버퍼 추가
-      return Math.ceil(wordCount * tokenRatio * 1.1);
-    } catch (error) {
-      console.error("[번역 익스텐션] 토큰 수 추정 오류:", error);
-      
-      // 최소한의 토큰 수 반환 (오류 방지)
-      return texts && Array.isArray(texts) ? texts.length * 5 : 10;
-    }
-  }
-  
-  /**
-   * 남은 토큰 수 계산
-   * @returns {Promise<number>} - 남은 토큰 수 (-1은 무제한)
-   */
-  async function getRemainingTokens() {
-    try {
-      const subscription = await getCurrentSubscription();
-      const limit = SUBSCRIPTION_LIMITS[subscription] || SUBSCRIPTION_LIMITS.FREE;
-      
-      // 프리미엄 회원은 무제한
-      if (limit === -1) {
-        return -1; // 무제한
-      }
-      
-      const usage = await getCurrentUsage();
-      const tokensUsed = typeof usage.tokensUsed === 'number' && !isNaN(usage.tokensUsed) ? 
-        usage.tokensUsed : 0;
-      
-      return Math.max(0, limit - tokensUsed);
-    } catch (error) {
-      console.error("[번역 익스텐션] 남은 토큰 계산 오류:", error);
-      return SUBSCRIPTION_LIMITS.FREE; // 기본 무료 한도 반환
-    }
-  }
-  
-  /**
-   * 구독 등급 설정 (결제 처리 후 호출)
-   * @param {string} level - 구독 등급 (FREE, BASIC, PREMIUM)
-   * @returns {Promise<boolean>} - 성공 여부
-   */
-  async function setSubscription(level) {
-    try {
-      // 유효한 구독 등급인지 확인
-      if (!SUBSCRIPTION_LIMITS.hasOwnProperty(level)) {
-        console.warn("[번역 익스텐션] 유효하지 않은 구독 등급:", level);
-        return false;
-      }
-      
-      return new Promise((resolve) => {
-        try {
-          chrome.storage.sync.set({ subscription: level }, () => {
-            // 크롬 런타임 에러 체크
-            if (chrome.runtime.lastError) {
-              console.warn("[번역 익스텐션] 구독 저장 오류:", chrome.runtime.lastError);
-              resolve(false);
-              return;
-            }
-            
-            // 이벤트 발생 (구독 업데이트)
-            try {
-              window.dispatchEvent(new CustomEvent('subscription:updated', {
-                detail: { subscription: level }
-              }));
-            } catch (eventError) {
-              console.error("[번역 익스텐션] 이벤트 발생 오류:", eventError);
-            }
-            
-            resolve(true);
-          });
-        } catch (storageError) {
-          console.error("[번역 익스텐션] 스토리지 저장 오류:", storageError);
-          resolve(false);
-        }
-      });
-    } catch (error) {
-      console.error("[번역 익스텐션] 구독 설정 오류:", error);
-      return false;
-    }
-  }
-  
-  /**
-   * 월별 사용량 리셋 체크
-   * @returns {Promise<boolean>} - 리셋 여부
-   */
-  async function checkAndResetMonthlyUsage() {
-    try {
-      const usage = await getCurrentUsage();
-      const currentMonth = getCurrentMonth();
-      
-      // 현재 저장된 월과 현재 월이 다르면 리셋
-      if (usage.month !== currentMonth) {
-        const newUsage = {
-          month: currentMonth,
-          tokensUsed: 0,
-          lastReset: new Date().toISOString()
-        };
-        
-        return new Promise((resolve) => {
-          try {
-            chrome.storage.sync.set({ usage: newUsage }, () => {
-              // 크롬 런타임 에러 체크
-              if (chrome.runtime.lastError) {
-                console.warn("[번역 익스텐션] 사용량 리셋 오류:", chrome.runtime.lastError);
-                resolve(false);
-                return;
-              }
-              
-              console.log('[번역 익스텐션] 월간 사용량 리셋 완료');
-              
-              // 이벤트 발생 (사용량 리셋)
-              try {
-                window.dispatchEvent(new CustomEvent('usage:reset', {
-                  detail: { usage: newUsage }
-                }));
-              } catch (eventError) {
-                console.error("[번역 익스텐션] 이벤트 발생 오류:", eventError);
-              }
-              
-              resolve(true);
-            });
-          } catch (storageError) {
-            console.error("[번역 익스텐션] 스토리지 저장 오류:", storageError);
-            resolve(false);
+      // 업그레이드 버튼 클릭 이벤트
+      const upgradeButton = document.getElementById('upgrade-subscription');
+      if (upgradeButton) {
+        upgradeButton.addEventListener('click', () => {
+          // 콜백 실행
+          if (typeof onUpgradeClick === 'function') {
+            onUpgradeClick();
           }
+          
+          // 알림 숨기기
+          limitElement.style.display = 'none';
         });
       }
       
-      return false;
-    } catch (error) {
-      console.error("[번역 익스텐션] 월별 사용량 리셋 체크 오류:", error);
-      return false;
-    }
-  }
-  
-  /**
-   * 모든 구독 한도 가져오기
-   * @returns {Object} - 구독 한도 객체
-   */
-  function getLimits() {
-    return { ...SUBSCRIPTION_LIMITS };
-  }
-  
-  /**
-   * 구독 등급을 사람이 읽기 쉬운 형태로 변환
-   * @param {string} subscription - 구독 등급 코드
-   * @returns {string} - 표시 이름
-   */
-  function getSubscriptionDisplayName(subscription) {
-    try {
-      switch (subscription) {
-        case 'BASIC': return "기본 ($5/월)";
-        case 'PREMIUM': return "프리미엄 ($10/월)";
-        case 'FREE':
-        default: return "무료";
-      }
-    } catch (error) {
-      console.error("[번역 익스텐션] 구독 표시 이름 변환 오류:", error);
-      return "무료"; // 기본값 반환
-    }
-  }
-  
-  /**
-   * 사용량을 로컬에 캐싱 (성능 최적화)
-   */
-  async function cacheLocalUsage() {
-    try {
-      const stats = await getUsageStats();
+      // 자동 숨김
+      setTimeout(() => {
+        if (limitElement.parentNode) {
+          limitElement.style.opacity = '0';
+          limitElement.style.transition = 'opacity 0.5s';
+          setTimeout(() => {
+            if (limitElement.parentNode) {
+              limitElement.parentNode.removeChild(limitElement);
+            }
+          }, 500);
+        }
+      }, UI_SETTINGS.limitExceededTimeout);
       
-      // 로컬 스토리지에 캐싱 (옵션)
-      if (window.localStorage) {
-        try {
-          localStorage.setItem('usageStats', JSON.stringify({
-            stats,
-            timestamp: Date.now()
-          }));
-        } catch (localStorageError) {
-          console.warn("[번역 익스텐션] 로컬 스토리지 캐싱 오류:", localStorageError);
+      return limitElement;
+    }
+    
+    return limitElement;
+  }
+  
+  /**
+   * 번역 완료 요약 표시
+   * @param {Object} summary - 번역 요약 데이터
+   */
+  function showTranslationSummary(summary) {
+    const { totalElements, translatedElements, totalTexts, translatedTexts, elapsedTime } = summary;
+    
+    // 요약 메시지 생성
+    let message = "번역 완료!";
+    
+    if (totalElements && translatedElements) {
+      message += ` ${translatedElements}/${totalElements} 요소`;
+    }
+    
+    if (totalTexts && translatedTexts) {
+      message += ` ${translatedTexts}/${totalTexts} 텍스트`;
+    }
+    
+    if (elapsedTime) {
+      message += ` (${(elapsedTime / 1000).toFixed(1)}초)`;
+    }
+    
+    // 요약 표시
+    showTranslationStatus(message, true, true);
+    
+    // 상태 통계 초기화
+    state.translationStats = {
+      totalElements: 0,
+      translatedElements: 0,
+      totalTexts: 0,
+      translatedTexts: 0,
+      lastUpdate: Date.now()
+    };
+  }
+  
+  /**
+   * 사용량 UI 업데이트 함수 (popup.html에서 사용)
+   * @param {Object} stats - 사용량 통계 객체
+   */
+  function updateUsageUI(stats) {
+    // 등급 표시
+    const subscriptionElement = document.getElementById('subscription-level');
+    if (subscriptionElement) {
+      let subscriptionName = "무료";
+      if (stats.subscription === 'BASIC') subscriptionName = "기본 ($5/월)";
+      if (stats.subscription === 'PREMIUM') subscriptionName = "프리미엄 ($10/월)";
+      
+      subscriptionElement.textContent = subscriptionName;
+    }
+    
+    // 프로그레스 바 업데이트
+    const progressBar = document.getElementById('usage-progress');
+    if (progressBar) {
+      if (stats.subscription === 'PREMIUM') {
+        progressBar.style.width = '100%';
+        progressBar.style.backgroundColor = '#4CAF50';
+      } else {
+        progressBar.style.width = `${stats.percentage}%`;
+        
+        // 경고 색상 (80% 이상이면 주황색, 95% 이상이면 빨간색)
+        if (stats.percentage >= 95) {
+          progressBar.style.backgroundColor = '#f44336';
+        } else if (stats.percentage >= 80) {
+          progressBar.style.backgroundColor = '#ff9800';
+        } else {
+          progressBar.style.backgroundColor = '#2196F3';
         }
       }
-    } catch (error) {
-      console.error("[번역 익스텐션] 사용량 캐싱 오류:", error);
     }
+    
+    // 사용량 텍스트 업데이트
+    const usageText = document.getElementById('usage-text');
+    if (usageText) {
+      if (stats.subscription === 'PREMIUM') {
+        usageText.textContent = `무제한 사용 가능`;
+      } else {
+        usageText.textContent = `${stats.tokensUsed.toLocaleString()} / ${stats.limit.toLocaleString()} 토큰 사용`;
+      }
+    }
+    
+    // 남은 양 업데이트
+    const remainingText = document.getElementById('remaining-text');
+    if (remainingText) {
+      if (stats.subscription === 'PREMIUM') {
+        remainingText.textContent = '무제한';
+      } else {
+        remainingText.textContent = `남은 토큰: ${stats.remaining.toLocaleString()}`;
+      }
+    }
+    
+    // 다음 리셋 날짜 표시
+    const resetText = document.getElementById('reset-date');
+    if (resetText) {
+      const resetDate = new Date(stats.lastReset);
+      resetDate.setMonth(resetDate.getMonth() + 1);
+      
+      const formattedDate = `${resetDate.getFullYear()}년 ${resetDate.getMonth() + 1}월 ${resetDate.getDate()}일`;
+      resetText.textContent = `다음 리셋: ${formattedDate}`;
+    }
+    
+    // 프리미엄 기능 상태 업데이트
+    updatePremiumFeaturesUI(stats.subscription === 'PREMIUM');
   }
   
-  // 초기화 - 사용량 캐싱 (시작 시 1회)
-  try {
-    cacheLocalUsage();
-  } catch (initError) {
-    console.error("[번역 익스텐션] 초기 사용량 캐싱 오류:", initError);
+  /**
+   * 프리미엄 기능 UI 업데이트
+   * @param {boolean} isPremium - 프리미엄 사용자 여부
+   */
+  function updatePremiumFeaturesUI(isPremium) {
+    const translateImageCheckbox = document.getElementById('translateImage');
+    if (translateImageCheckbox) {
+      translateImageCheckbox.disabled = !isPremium;
+      
+      // 프리미엄 기능의 레이블에 disabled 클래스 추가/제거
+      const translateImageLabel = translateImageCheckbox.nextElementSibling;
+      if (translateImageLabel) {
+        if (isPremium) {
+          translateImageLabel.classList.remove('disabled-text');
+        } else {
+          translateImageLabel.classList.add('disabled-text');
+        }
+      }
+    }
+    
+    // 다른 프리미엄 기능들에 대한 UI 업데이트도 여기에 추가
+  }
+  
+  /**
+   * 설정 저장 완료 표시
+   * @param {HTMLElement} button - 저장 버튼 요소
+   * @param {string} originalText - 원래 버튼 텍스트
+   * @param {string} completionText - 완료 시 표시할 텍스트
+   */
+  function showSettingsSaved(button, originalText = "설정 저장", completionText = "저장됨!") {
+    if (!button) return;
+    
+    const btnText = button.textContent;
+    button.textContent = completionText;
+    
+    setTimeout(() => {
+      button.textContent = originalText || btnText;
+    }, 1500);
+  }
+  
+  /**
+   * 메시지 토스트 표시
+   * @param {string} message - 표시할 메시지
+   * @param {string} type - 메시지 유형 ('success', 'error', 'info', 'warning')
+   * @param {number} timeout - 표시 시간(ms)
+   */
+  function showToast(message, type = 'info', timeout = 3000) {
+    let toastElement = document.getElementById('toast-message');
+    
+    if (!toastElement) {
+      toastElement = document.createElement('div');
+      toastElement.id = 'toast-message';
+      
+      // 기본 스타일
+      Object.assign(toastElement.style, {
+        position: 'fixed',
+        bottom: '10px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        padding: '10px 20px',
+        borderRadius: '4px',
+        color: 'white',
+        fontSize: '14px',
+        fontFamily: 'Arial, sans-serif',
+        boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
+        zIndex: '10000',
+        transition: 'opacity 0.3s ease'
+      });
+      
+      document.body.appendChild(toastElement);
+    }
+    
+    // 메시지 유형에 따른 색상 설정
+    switch (type) {
+      case 'success':
+        toastElement.style.background = '#4CAF50';
+        break;
+      case 'error':
+        toastElement.style.background = '#f44336';
+        break;
+      case 'warning':
+        toastElement.style.background = '#ff9800';
+        break;
+      case 'info':
+      default:
+        toastElement.style.background = '#2196F3';
+        break;
+    }
+    
+    toastElement.textContent = message;
+    toastElement.style.opacity = '1';
+    
+    // 기존 타이머 제거
+    if (toastElement.hideTimer) {
+      clearTimeout(toastElement.hideTimer);
+    }
+    
+    // 타임아웃 후 숨기기
+    toastElement.hideTimer = setTimeout(() => {
+      toastElement.style.opacity = '0';
+      
+      setTimeout(() => {
+        if (toastElement.parentNode) {
+          toastElement.parentNode.removeChild(toastElement);
+        }
+      }, 300);
+    }, timeout);
+    
+    return toastElement;
+  }
+  
+  /**
+   * 설정 업데이트
+   * @param {Object} newSettings - 새 설정 값
+   */
+  function updateSettings(newSettings) {
+    Object.assign(UI_SETTINGS, newSettings);
+  }
+  
+  /**
+   * 현재 설정 가져오기
+   * @returns {Object} - 현재 설정
+   */
+  function getSettings() {
+    return {...UI_SETTINGS};
   }
   
   // 이벤트 리스너 설정
-  try {
-    window.addEventListener('usage:updated', () => {
-      try {
-        cacheLocalUsage();
-      } catch (error) {
-        console.error("[번역 익스텐션] 사용량 업데이트 이벤트 처리 오류:", error);
+  function setupEventListeners() {
+    // popup.html에서 사용량 통계 로드 시 UI 업데이트
+    window.addEventListener('usage:updated', async (event) => {
+      if (document.querySelector('.subscription-info')) {
+        // 팝업 페이지인 경우
+        try {
+          const stats = await window.UsageManager.getUsageStats();
+          updateUsageUI(stats);
+        } catch (error) {
+          console.error("[번역 익스텐션] 사용량 UI 업데이트 오류:", error);
+        }
       }
     });
     
-    window.addEventListener('subscription:updated', () => {
-      try {
-        cacheLocalUsage();
-      } catch (error) {
-        console.error("[번역 익스텐션] 구독 업데이트 이벤트 처리 오류:", error);
+    // 한도 초과 이벤트 리스너
+    window.addEventListener('translation:limit-exceeded', () => {
+      showTranslationLimitExceeded(() => {
+        chrome.runtime.sendMessage({ action: "openPopup" });
+      });
+    });
+    
+    // 번역 완료 이벤트 리스너
+    window.addEventListener('translation:complete', (event) => {
+      const detail = event.detail;
+      if (detail && detail.summary) {
+        showTranslationSummary(detail.summary);
+      } else {
+        showTranslationStatus(`번역 완료!`, true, true);
       }
     });
-  } catch (listenerError) {
-    console.error("[번역 익스텐션] 이벤트 리스너 설정 오류:", listenerError);
+    
+    // 번역 상태 업데이트 이벤트 리스너
+    window.addEventListener('translation:progress', (event) => {
+      const detail = event.detail;
+      if (detail && detail.stats) {
+        updateTranslationProgress(detail.stats);
+      }
+    });
+    
+    // 텍스트 교체 이벤트 리스너
+    window.addEventListener('dom:text-replaced', (event) => {
+      const detail = event.detail;
+      if (detail && detail.count > 0) {
+        // 번역 통계 업데이트
+        state.translationStats.translatedTexts += detail.count;
+        updateTranslationProgress();
+      }
+    });
   }
+  
+  // 초기화
+  function init() {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', setupEventListeners);
+    } else {
+      setupEventListeners();
+    }
+  }
+  
+  // 초기화 실행
+  init();
   
   // 공개 API
   return {
-    getCurrentSubscription,
-    getCurrentMonth,
-    getCurrentUsage,
-    recordUsage,
-    canTranslate,
-    getUsageStats,
-    estimateTokens,
-    getRemainingTokens,
-    setSubscription,
-    checkAndResetMonthlyUsage,
-    getLimits,
-    getSubscriptionDisplayName
+    showTranslationStatus,
+    hideTranslationStatus,
+    showTranslationLimitExceeded,
+    updateTranslationProgress,
+    showTranslationSummary,
+    updateUsageUI,
+    updatePremiumFeaturesUI,
+    showSettingsSaved,
+    showToast,
+    updateSettings,
+    getSettings
   };
 })();
 
 // 모듈 내보내기
-window.UsageManager = UsageManager;
+window.UIManager = UIManager;

@@ -13,19 +13,37 @@
     return; // 이미 초기화되었다면 함수 실행 중단
   }
   
-  // 필요한 모듈 로드 지연 함수
-  function ensureModulesLoaded(maxAttempts = 5, delay = 200) {
+  // 기존 함수 유지하되 개선
+  function ensureModulesLoaded(maxAttempts = 10, delay = 200) {
     return new Promise((resolve, reject) => {
       let attempts = 0;
       
       function checkModules() {
-        if (
-          window.DOMHandler && 
-          window.TranslatorService && 
-          window.CacheManager && 
-          window.UsageManager && 
-          window.UIManager
-        ) {
+        // 모듈 상태 출력 (모든 시도에서)
+        if (attempts > 0) {
+          console.log("[번역 익스텐션] 모듈 로드 상태 확인 (#" + attempts + "):");
+          console.log("- DOMSelector:", typeof window.DOMSelector !== 'undefined');
+          console.log("- DOMObserver:", typeof window.DOMObserver !== 'undefined');
+          console.log("- DOMManipulator:", typeof window.DOMManipulator !== 'undefined');
+          console.log("- BatchEngine:", typeof window.BatchEngine !== 'undefined');
+          console.log("- TranslatorService:", typeof window.TranslatorService !== 'undefined');
+          console.log("- CacheManager:", typeof window.CacheManager !== 'undefined');
+          console.log("- UsageManager:", typeof window.UsageManager !== 'undefined');
+        }
+        
+        // 핵심 모듈 확인
+        const allModulesLoaded = 
+          typeof window.DOMSelector !== 'undefined' &&
+          typeof window.DOMObserver !== 'undefined' &&
+          typeof window.DOMManipulator !== 'undefined' &&
+          typeof window.BatchEngine !== 'undefined' &&
+          typeof window.TranslatorService !== 'undefined' &&
+          typeof window.CacheManager !== 'undefined' &&
+          typeof window.UsageManager !== 'undefined' &&
+          typeof window.DOMHandler !== 'undefined';
+        
+        if (allModulesLoaded) {
+          console.log("[번역 익스텐션] 모든 모듈이 정상적으로 로드되었습니다!");
           resolve(true);
           return;
         }
@@ -33,11 +51,43 @@
         attempts++;
         if (attempts >= maxAttempts) {
           console.error("[번역 익스텐션] 필요한 모듈이 로드되지 않았습니다. 로드 순서를 확인하세요.");
-          console.log("DOMHandler:", !!window.DOMHandler);
-          console.log("TranslatorService:", !!window.TranslatorService);
-          console.log("CacheManager:", !!window.CacheManager);
-          console.log("UsageManager:", !!window.UsageManager);
-          console.log("UIManager:", !!window.UIManager);
+          
+          // 누락된 모듈 목록 생성
+          const missingModules = [];
+          if (typeof window.DOMSelector === 'undefined') missingModules.push("utils/dom/dom-selector.js");
+          if (typeof window.DOMObserver === 'undefined') missingModules.push("utils/dom/dom-observer.js");
+          if (typeof window.DOMManipulator === 'undefined') missingModules.push("utils/dom/dom-manipulator.js");
+          if (typeof window.BatchEngine === 'undefined') missingModules.push("utils/batch/batch_engine.js");
+          
+          // 마지막 시도: 누락된 모듈 로드 요청
+          if (missingModules.length > 0) {
+            console.log("[번역 익스텐션] 누락된 모듈 로드 시도:", missingModules);
+            
+            try {
+              chrome.runtime.sendMessage({ 
+                action: "loadScripts", 
+                scripts: missingModules
+              }, (response) => {
+                console.log("[번역 익스텐션] 모듈 로드 요청 응답:", response);
+                // 추가 대기 후 다시 한번 체크 시도
+                setTimeout(() => {
+                  if (window.DOMSelector && 
+                      window.DOMObserver && 
+                      window.DOMManipulator && 
+                      window.BatchEngine) {
+                    console.log("[번역 익스텐션] 모듈 수동 로드 성공!");
+                    resolve(true);
+                  } else {
+                    reject(new Error("모듈 로드 실패"));
+                  }
+                }, 1000);
+              });
+              return; // 추가 시간 제공을 위해 즉시 반환
+            } catch (e) {
+              console.error("[번역 익스텐션] 모듈 로드 요청 오류:", e);
+            }
+          }
+          
           reject(new Error("모듈 로드 실패"));
           return;
         }
@@ -49,6 +99,25 @@
       checkModules();
     });
   }
+
+// 자동 모듈 상태 확인 (새로 추가할 함수)
+function checkModuleStatus() {
+  console.log("[번역 익스텐션] 모듈 로드 상태 확인:");
+  console.log("- DOMHandler:", typeof window.DOMHandler !== 'undefined' ? "로드됨" : "누락");
+  console.log("- TranslatorService:", typeof window.TranslatorService !== 'undefined' ? "로드됨" : "누락");
+  console.log("- CacheManager:", typeof window.CacheManager !== 'undefined' ? "로드됨" : "누락");
+  console.log("- UsageManager:", typeof window.UsageManager !== 'undefined' ? "로드됨" : "누락");
+  console.log("- UIManager:", typeof window.UIManager !== 'undefined' ? "로드됨" : "누락");
+  console.log("- DOMSelector:", typeof window.DOMSelector !== 'undefined' ? "로드됨" : "누락");
+  console.log("- DOMObserver:", typeof window.DOMObserver !== 'undefined' ? "로드됨" : "누락");
+  console.log("- DOMManipulator:", typeof window.DOMManipulator !== 'undefined' ? "로드됨" : "누락");
+  console.log("- BatchEngine:", typeof window.BatchEngine !== 'undefined' ? "로드됨" : "누락");
+}
+
+// 페이지 로드 시 모듈 상태 확인 (선택적으로 추가)
+document.addEventListener('DOMContentLoaded', function() {
+  setTimeout(checkModuleStatus, 500);
+});
   
   // 안전한 이벤트 핸들러 래퍼 함수
   function createSafeEventListener(eventName, handler) {

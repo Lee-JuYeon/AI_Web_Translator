@@ -275,11 +275,9 @@ const DOMManipulator = (function() {
      */
     function replaceElementText(element, newText) {
       try {
-         // 요소가 존재하는지 명시적으로 확인
-        if (!element || !(element instanceof Element) || !document.contains(element)) {
-            console.warn("[번역 익스텐션] 유효하지 않은 DOM 요소:", element);
-            return false;
-        } 
+        if (!element || !(element instanceof Element)) {
+          return false;
+        }
         
         // 현재 텍스트 내용 가져오기
         const originalText = element.textContent;
@@ -288,23 +286,7 @@ const DOMManipulator = (function() {
         if (originalText === newText) {
           return false;
         }
-
-        // classList 사용 전 확인
-        if (settings.translationClass && element.classList) {
-            element.classList.add(settings.translationClass);
-        }
         
-        // 애니메이션 적용 전 classList 확인
-        if (settings.animateChanges && element.classList) {
-            element.classList.add('tony-translating');
-            setTimeout(() => {
-            // 요소가 여전히 DOM에 존재하는지 확인
-            if (document.contains(element)) {
-                element.classList.remove('tony-translating');
-            }
-            }, 500);
-        }
-
         // 원본 텍스트 저장
         if (settings.keepOriginalOnHover) {
           element.setAttribute(settings.sourceAttr, originalText);

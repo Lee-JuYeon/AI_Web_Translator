@@ -6,11 +6,16 @@
   const APP_CONFIG = {
     menuItemId: "tony_translate",
     contentScripts: [
-      "utils/cache-manager.js",
-      "utils/usage-manager.js", 
-      "utils/dom-handler.js",
-      "utils/translator-service.js",
+      "utils/cache-manager.js", 
+      "utils/usage-manager.js",
       "utils/ui-manager.js",
+      "utils/dom/dom-selector.js",   
+      "utils/dom/dom-observer.js",     
+      "utils/dom/dom-manipulator.js",
+      "utils/batch/batch_engine.js",     
+      "utils/translator-service.js",
+      
+      "utils/dom/dom-handler.js",        
       "content-script.js"
     ]
   };
@@ -105,45 +110,52 @@
     const loadScriptSequentially = (index = 0) => {
       if (index >= APP_CONFIG.contentScripts.length) {
         // 모든 스크립트 로드 완료 후 번역 요청
-        chrome.tabs.sendMessage(tabId, { action: "translatePage" });
+        console.log("[번역 익스텐션] 모든 스크립트 로드 완료, 번역 요청 전송");
+        chrome.tabs.sendMessage(tabId, { action: "translatePage" })
+          .catch(err => console.error("[번역 익스텐션] 번역 요청 전송 오류:", err));
         return;
       }
+      
+      console.log(`[번역 익스텐션] ${APP_CONFIG.contentScripts[index]} 로드 중...`);
       
       chrome.scripting.executeScript({
         target: { tabId: tabId },
         files: [APP_CONFIG.contentScripts[index]]
       }).then(() => {
+        console.log(`[번역 익스텐션] ${APP_CONFIG.contentScripts[index]} 로드 성공`);
         // 다음 스크립트 로드
         loadScriptSequentially(index + 1);
       }).catch((err) => {
-        console.error(`${APP_CONFIG.contentScripts[index]} 실행 실패:`, err);
+        console.error(`[번역 익스텐션] ${APP_CONFIG.contentScripts[index]} 로드 실패:`, err);
         
-        // 오류가 발생해도 계속 진행 (가능한 경우)
-        if (index + 1 < APP_CONFIG.contentScripts.length) {
-          loadScriptSequentially(index + 1);
-        } else {
-          // 최선의 노력으로 번역 시도
-          try {
-            chrome.tabs.sendMessage(tabId, { action: "translatePage" });
-          } catch (e) {
-            console.error("번역 요청 실패:", e);
-          }
+        // 핵심 모듈 로드 실패 시 중단
+        if (index < 4) {  // cache-manager.js, usage-manager.js, ui-manager.js, translator-service.js는 필수
+          console.error("[번역 익스텐션] 핵심 모듈 로드 실패로 번역을 중단합니다.");
+          return;
         }
+        
+        // 그 외 모듈은 건너뛰고 계속 진행
+        loadScriptSequentially(index + 1);
       });
     };
 
     // content-script가 이미 로드되었는지 확인
-    chrome.tabs.sendMessage(tabId, { action: "ping" }, response => {
-      const hasError = chrome.runtime.lastError;
-      
-      if (hasError || !response) {
+    chrome.tabs.sendMessage(tabId, { action: "ping" })
+      .then(response => {
+        if (response && response.status === "ready") {
+          // 이미 로드된 경우 바로 번역 요청
+          console.log("[번역 익스텐션] 콘텐츠 스크립트가 이미 로드됨");
+          chrome.tabs.sendMessage(tabId, { action: "translatePage" });
+        } else {
+          // 순차적으로 스크립트 로드 시작
+          loadScriptSequentially();
+        }
+      })
+      .catch(error => {
+        console.log("[번역 익스텐션] 콘텐츠 스크립트 확인 실패, 새로 로드합니다:", error);
         // 순차적으로 스크립트 로드 시작
         loadScriptSequentially();
-      } else {
-        // 이미 로드된 경우 바로 번역 요청
-        chrome.tabs.sendMessage(tabId, { action: "translatePage" });
-      }
-    });
+      });
   }
 
   // 이벤트 리스너 등록
@@ -158,40 +170,39 @@
     
     // 컨텐츠 스크립트와 통신
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-      console.log("🧩 메시지 수신:", request.action);
+      const { action } = request;
+      console.log("🧩 메시지 수신:", action);
       
-      switch (request.action) {
-        case "openPopup":
+      // 메시지 타입별 핸들러 객체
+      const messageHandlers = {
+        // 팝업 열기
+        openPopup: () => {
           chrome.action.openPopup();
-          sendResponse({success: true});
+          sendResponse({ success: true });
           return true;
-          
-        case "updateSettings":
-          // 설정 업데이트 처리
-          if (request.settings) {
-            chrome.storage.sync.set({ settings: request.settings }, () => {
-              // 열려있는 모든 탭에 설정 업데이트 알림
-              chrome.tabs.query({}, (tabs) => {
-                tabs.forEach(tab => {
-                  try {
-                    chrome.tabs.sendMessage(tab.id, { 
-                      action: "updateSettings", 
-                      settings: request.settings 
-                    });
-                  } catch (err) {
-                    // 오류 무시 (content-script가 로드되지 않은 탭)
-                  }
-                });
-              });
-              
-              sendResponse({success: true});
-            });
+        },
+        
+        // 설정 업데이트 처리
+        updateSettings: () => {
+          if (!request.settings) {
+            sendResponse({ success: false, error: "설정 값이 없습니다" });
             return true;
           }
-          break;
           
-        case "getUsageStats":
-          // 사용량 통계를 요청한 경우 (popup.js에서 사용)
+          chrome.storage.sync.set({ settings: request.settings }, () => {
+            // 열려있는 모든 탭에 설정 업데이트 알림
+            broadcastToAllTabs({
+              action: "updateSettings",
+              settings: request.settings
+            });
+            
+            sendResponse({ success: true });
+          });
+          return true;
+        },
+        
+        // 사용량 통계 가져오기
+        getUsageStats: () => {
           chrome.storage.sync.get(['usage', 'subscription'], (data) => {
             sendResponse({
               usage: data.usage || {
@@ -203,9 +214,10 @@
             });
           });
           return true;
-          
-        case "clearCache":
-          // 캐시 정리 요청 (popup.js에서 사용)
+        },
+        
+        // 캐시 정리 요청
+        clearCache: () => {
           chrome.storage.local.get(null, (items) => {
             const cacheKeys = Object.keys(items).filter(key => 
               key.startsWith('translate_')
@@ -214,22 +226,114 @@
             if (cacheKeys.length > 0) {
               chrome.storage.local.remove(cacheKeys, () => {
                 sendResponse({
-                  success: true, 
+                  success: true,
                   clearedItems: cacheKeys.length
                 });
               });
             } else {
               sendResponse({
-                success: true, 
+                success: true,
                 clearedItems: 0
               });
             }
           });
           return true;
+        },
+        
+        // 누락된 모듈 로드 요청
+        loadScripts: () => {
+          if (!Array.isArray(request.scripts) || request.scripts.length === 0) {
+            sendResponse({ success: false, error: "유효한 스크립트 목록이 필요합니다" });
+            return true;
+          }
+          
+          console.log("[번역 익스텐션] 누락된 모듈 로드 요청 수신:", request.scripts);
+          
+          if (!sender.tab) {
+            sendResponse({ success: false, error: "탭 정보 없음" });
+            return true;
+          }
+          
+          const tabId = sender.tab.id;
+          const loadPromises = [];
+          
+          // 각 스크립트 로드 요청을 병렬로 처리
+          request.scripts.forEach(script => {
+            const loadPromise = chrome.scripting.executeScript({
+              target: { tabId },
+              files: [script]
+            })
+            .then(() => {
+              console.log(`[번역 익스텐션] ${script} 수동 로드 성공`);
+              return { script, success: true };
+            })
+            .catch(error => {
+              console.error(`[번역 익스텐션] ${script} 수동 로드 실패:`, error);
+              return { script, success: false, error: error.message };
+            });
+            
+            loadPromises.push(loadPromise);
+          });
+          
+          // 모든 로드 요청 완료 후 응답
+          Promise.all(loadPromises)
+            .then(results => {
+              sendResponse({ 
+                success: true, 
+                results: results,
+                allSucceeded: results.every(r => r.success)
+              });
+            })
+            .catch(error => {
+              sendResponse({ 
+                success: false, 
+                error: `스크립트 로드 중 오류 발생: ${error.message}` 
+              });
+            });
+          
+          return true;
+        }
+      };
+      
+      // 지정된 핸들러 호출 또는 기본 응답
+      if (messageHandlers[action]) {
+        return messageHandlers[action]();
       }
       
-      return false; 
+      // 해당하는 핸들러가 없는 경우
+      console.warn(`[번역 익스텐션] 처리되지 않은 메시지 타입: ${action}`);
+      return false;
     });
+
+    /**
+     * 모든 열린 탭에 메시지 전송
+     * @param {Object} message - 전송할 메시지 객체
+     */
+    function broadcastToAllTabs(message) {
+      chrome.tabs.query({}, (tabs) => {
+        tabs.forEach(tab => {
+          try {
+            chrome.tabs.sendMessage(tab.id, message).catch(err => {
+              // content-script가 로드되지 않은 탭에 대한 오류는 무시
+              if (!err.message.includes("Receiving end does not exist")) {
+                console.warn(`[번역 익스텐션] 탭 ${tab.id} 메시지 전송 오류:`, err);
+              }
+            });
+          } catch (err) {
+            // 오류 무시 (content-script가 로드되지 않은 탭)
+          }
+        });
+      });
+    }
+
+    /**
+     * 현재 월 구하기 (yyyy-mm 형식)
+     * @returns {string} - 현재 월 (yyyy-mm)
+     */
+    function getCurrentMonth() {
+      const date = new Date();
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    }
     
     // 확장 프로그램 설치 또는 업데이트 시 실행
     chrome.runtime.onInstalled.addListener((details) => {

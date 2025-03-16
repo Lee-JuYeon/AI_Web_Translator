@@ -6,9 +6,8 @@ const DOMSelector = (function() {
     // 내부 설정 (기본값)
     const DEFAULT_SETTINGS = {
         minTextLength: 2,
-        textContainerSelector: 'p, h1, h2, h3, h4, h5, h6, li, span, a, td, th, caption, label, button, div:not(:empty), article, section, strong, em, blockquote, figcaption, cite, summary, time, small, header, footer, nav, aside, main, pre, code, address',
-        ignoreSelector: 'script, style, noscript, code[class^="language-"], pre[class^="language-"], .no-translate, [data-no-translate], [translate="no"]',
-        translatedAttr: 'data-tony-translated',
+        textContainerSelector: 'p, h1, h2, h3, h4, h5, li, span, a, td, div, article', // 단순화
+        ignoreSelector: 'script, style, noscript, code, pre', // 단순화translatedAttr: 'data-tony-translated',
         pendingAttr: 'data-tony-pending',
         sourceAttr: 'data-tony-source',
         additionalSelector: '.text, .title, .headline, .desc, .content, .caption, .summary, .article-txt, .article-tit'
@@ -16,22 +15,6 @@ const DOMSelector = (function() {
     
     // 현재 설정
     let settings = {...DEFAULT_SETTINGS};
-
-    /**
-     * 선택자 유효성 검사
-     * @param {string} selector - 검사할 CSS 선택자
-     * @returns {boolean} - 유효성 여부
-     */
-    function isValidSelector(selector) {
-        try {
-          document.createDocumentFragment().querySelector(selector);
-          return true;
-        } catch (error) {
-          console.warn(`[번역 익스텐션] 유효하지 않은 선택자: ${selector}`, error);
-          return false;
-        }
-    }
-      
     
     /**
      * 요소가 텍스트 컨테이너인지 확인
@@ -52,8 +35,7 @@ const DOMSelector = (function() {
         
         // 무시할 선택자에 매칭되는 요소는 제외
         try {
-          if (element.matches && isValidSelector(settings.ignoreSelector) && 
-              element.matches(settings.ignoreSelector)) {
+          if (element.matches && element.matches(settings.ignoreSelector)) {
             return false;
           }
         } catch (matchError) {
@@ -111,30 +93,37 @@ const DOMSelector = (function() {
      * @param {string} selector - CSS 선택자
      * @returns {boolean} - 매칭되는 부모 존재 여부
      */
+    
     function hasParentMatching(node, selector) {
-      try {
-        if (!node || !selector || !isValidSelector(selector)) return false;
+        try {
+        if (!node || !selector) return false;
+        
+        // 선택자 유효성 검사
+        if (!isValidSelector(selector)) {
+            return false; // 유효하지 않은 선택자인 경우 즉시 반환
+        }
         
         let parent = node.parentNode;
         
         while (parent && parent !== document.body) {
-          if (parent.nodeType === Node.ELEMENT_NODE) {
+            if (parent.nodeType === Node.ELEMENT_NODE) {
             try {
-              if (parent.matches && parent.matches(selector)) {
+                if (parent.matches && parent.matches(selector)) {
                 return true;
-              }
+                }
             } catch (matchError) {
-              console.warn("[번역 익스텐션] matches 함수 오류:", matchError);
+                console.warn("[번역 익스텐션] matches 함수 오류:", matchError);
+                // 오류가 발생해도 계속 진행
             }
-          }
-          parent = parent.parentNode;
+            }
+            parent = parent.parentNode;
         }
         
         return false;
-      } catch (error) {
+        } catch (error) {
         console.error("[번역 익스텐션] 부모 노드 확인 오류:", error);
         return false;
-      }
+        }
     }
     
     /**
@@ -149,13 +138,6 @@ const DOMSelector = (function() {
         }
         
         const textNodes = [];
-        
-        // 유효한 선택자 확인
-        if (!isValidSelector(settings.ignoreSelector)) {
-          console.warn("[번역 익스텐션] 유효하지 않은 ignoreSelector:", settings.ignoreSelector);
-          // 기본 무시 선택자로 대체
-          settings.ignoreSelector = 'script, style, noscript';
-        }
         
         // TreeWalker로 요소 내 모든 텍스트 노드 탐색
         try {
@@ -282,24 +264,8 @@ const DOMSelector = (function() {
           containers.push(root);
         }
         
-        // 선택자 유효성 검사
-        if (!isValidSelector(settings.textContainerSelector)) {
-          console.warn("[번역 익스텐션] 유효하지 않은 textContainerSelector:", settings.textContainerSelector);
-          // 기본 선택자로 대체
-          settings.textContainerSelector = 'p, h1, h2, h3, h4, h5, h6, li, span, a';
-        }
-        
-        if (!isValidSelector(settings.additionalSelector)) {
-          console.warn("[번역 익스텐션] 유효하지 않은 additionalSelector:", settings.additionalSelector);
-          // 빈 문자열로 대체
-          settings.additionalSelector = '';
-        }
-        
         // 선택자 확장 (결합)
-        let fullSelector = settings.textContainerSelector;
-        if (settings.additionalSelector) {
-          fullSelector += `, ${settings.additionalSelector}`;
-        }
+        const fullSelector = `${settings.textContainerSelector}, ${settings.additionalSelector}`;
         
         // 텍스트 컨테이너 선택자로 하위 요소 검색
         try {
@@ -314,8 +280,7 @@ const DOMSelector = (function() {
               }
               
               // 무시할 선택자에 매칭되는 요소는 제외
-              if (isValidSelector(settings.ignoreSelector) && 
-                  element.matches && element.matches(settings.ignoreSelector)) {
+              if (element.matches && element.matches(settings.ignoreSelector)) {
                 return;
               }
               
@@ -348,8 +313,10 @@ const DOMSelector = (function() {
         if (!selector || typeof selector !== 'string') return [];
         
         // 선택자 유효성 검사
-        if (!isValidSelector(selector)) {
-          console.warn(`[번역 익스텐션] 유효하지 않은 선택자: ${selector}`);
+        try {
+          document.createDocumentFragment().querySelector(selector);
+        } catch (selectorError) {
+          console.warn(`[번역 익스텐션] 잘못된 선택자: ${selector}`, selectorError);
           return [];
         }
         
@@ -370,8 +337,10 @@ const DOMSelector = (function() {
         if (!selector || typeof selector !== 'string') return null;
         
         // 선택자 유효성 검사
-        if (!isValidSelector(selector)) {
-          console.warn(`[번역 익스텐션] 유효하지 않은 선택자: ${selector}`);
+        try {
+          document.createDocumentFragment().querySelector(selector);
+        } catch (selectorError) {
+          console.warn(`[번역 익스텐션] 잘못된 선택자: ${selector}`, selectorError);
           return null;
         }
         
@@ -415,7 +384,6 @@ const DOMSelector = (function() {
       try {
         if (!newSettings) return;
         settings = { ...settings, ...newSettings };
-        console.log("[번역 익스텐션] DOM 선택자 설정 업데이트 완료");
       } catch (error) {
         console.error('[번역 익스텐션] 설정 업데이트 오류:', error);
       }
@@ -472,24 +440,91 @@ const DOMSelector = (function() {
         console.error('[번역 익스텐션] 번역 속성 초기화 오류:', error);
       }
     }
+
+        // dom-selector.js 파일 수정
+    function isValidSelector(selector) {
+        try {
+            // 빈 선택자나 null 체크
+            if (!selector || typeof selector !== 'string' || selector.trim() === '') {
+                return false;
+            }
+            
+            // 선택자에 특수문자가 포함된 경우 추가 검증
+            if (selector.includes('(') || selector.includes(')') || 
+                selector.includes('[') || selector.includes(']')) {
+                // 복잡한 선택자 검증은 더 안전한 방법으로
+                try {
+                document.querySelector(selector);
+                return true;
+                } catch (e) {
+                console.warn(`[번역 익스텐션] 복잡한 선택자 검증 실패: ${selector}`, e);
+                return false;
+                }
+            }
+            
+            // 기본 검증
+            document.createDocumentFragment().querySelector(selector);
+            return true;
+        } catch (error) {
+            console.warn(`[번역 익스텐션] 유효하지 않은 선택자: ${selector}`, error);
+            return false;
+        }
+    }
+
+    // matches 함수 호출을 안전하게 보호
+    function safeMatches(element, selector) {
+        if (!element || !element.matches || !isValidSelector(selector)) {
+            return false;
+        }
+        
+        try {
+            return element.matches(selector);
+        } catch (error) {
+            console.warn("[번역 익스텐션] matches 함수 오류:", error);
+            return false;
+        }
+    }
+  
+        // hasParentMatching 함수 수정
+    function hasParentMatching(node, selector) {
+        // 선택자가 유효하지 않으면 즉시 반환
+        if (!node || !selector || !isValidSelector(selector)) {
+            return false;
+        }
+        
+        try {
+            let parent = node.parentNode;
+        
+        while (parent && parent !== document.body) {
+            if (parent.nodeType === Node.ELEMENT_NODE) {
+                if (safeMatches(parent, selector)) {
+                    return true;
+                }
+            }
+            parent = parent.parentNode;
+        }
+        
+            return false;
+        } catch (error) {
+            console.error("[번역 익스텐션] 부모 노드 확인 오류:", error);
+            return false;
+        }
+    }
     
-    // 공개 API 객체 반환
+    // 공개 API
     return {
-        isValidSelector,
-        isTextContainer,
-        hasParentMatching,
-        extractTextNodesFromElement,
-        findTextContainers,
-        findElements,
-        findElement,
-        extractAllTextNodes,
-        updateSettings,
-        getSettings,
-        resetAllTranslationAttributes
+      isTextContainer,
+      hasParentMatching,
+      extractTextNodesFromElement,
+      findTextContainers,
+      findElements,
+      findElement,
+      extractAllTextNodes,
+      updateSettings,
+      getSettings,
+      resetAllTranslationAttributes
     };
-})();
-
-// 모듈 내보내기
-window.DOMSelector = DOMSelector;
-
-console.log('[번역 익스텐션] DOMSelector 모듈 등록됨');
+  })();
+  
+  // 모듈 내보내기
+  window.DOMSelector = DOMSelector;

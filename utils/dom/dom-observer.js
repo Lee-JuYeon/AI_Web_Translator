@@ -2,6 +2,21 @@
 
 const DOMObserver = (function() {
     'use strict';
+
+    try {
+        console.log("[번역 익스텐션] DOM Observer 모듈 로드 시작");
+        
+        // 모듈 로드 시 진단 정보 출력
+        window.addEventListener('error', function(event) {
+          if (event.filename && event.filename.includes('dom-observer.js')) {
+            console.error('[번역 익스텐션] DOM Observer 모듈 오류:', event.message);
+          }
+        });
+        
+        // 나머지 코드...
+    } catch (initError) {
+        console.error("[번역 익스텐션] DOM Observer 모듈 초기화 오류:", initError);
+    }
     
     // 내부 설정 (기본값)
     const DEFAULT_SETTINGS = {
