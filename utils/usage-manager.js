@@ -22,6 +22,12 @@ const UsageManager = (function() {
     try {
       return new Promise((resolve) => {
         chrome.storage.sync.get('subscription', (data) => {
+          if (chrome.runtime.lastError) {
+            console.warn(`[${TonyConfig.APP_CONFIG.appName}] 구독 정보 조회 오류:`, chrome.runtime.lastError);
+            resolve('FREE');
+            return;
+          }
+          
           const subscription = data && data.subscription ? data.subscription : 'FREE';
           
           switch (subscription) {
@@ -36,7 +42,7 @@ const UsageManager = (function() {
         });
       });
     } catch (error) {
-      console.error(`[${TonyConfig.APP_CONFIG.appName}] 구독 정보 가져오기 오류:`, error);
+      handleError('구독 정보 가져오기 오류', error);
       return 'FREE'; // 오류 시 기본값
     }
   }
@@ -49,22 +55,22 @@ const UsageManager = (function() {
     try {
       return new Promise((resolve) => {
         chrome.storage.sync.get('usage', (data) => {
+          if (chrome.runtime.lastError) {
+            console.warn(`[${TonyConfig.APP_CONFIG.appName}] 사용량 조회 오류:`, chrome.runtime.lastError);
+            resolve(createDefaultUsage());
+            return;
+          }
+          
           const currentMonth = TonyConfig.getCurrentMonth();
           
           // 사용량 데이터가 없거나 이번 달 데이터가 아니면 초기화
           if (!data || !data.usage || !data.usage.month || data.usage.month !== currentMonth) {
-            const newUsage = {
-              month: currentMonth,
-              tokensUsed: 0,
-              lastReset: new Date().toISOString()
-            };
+            const newUsage = createDefaultUsage();
             
             // 스토리지에 새 사용량 저장
-            try {
-              chrome.storage.sync.set({ usage: newUsage });
-            } catch (storageError) {
-              console.error(`[${TonyConfig.APP_CONFIG.appName}] 스토리지 저장 오류:`, storageError);
-            }
+            saveUsageToStorage(newUsage).catch(error => {
+              console.error(`[${TonyConfig.APP_CONFIG.appName}] 사용량 저장 오류:`, error);
+            });
             
             resolve(newUsage);
           } else {
@@ -73,14 +79,39 @@ const UsageManager = (function() {
         });
       });
     } catch (error) {
-      console.error(`[${TonyConfig.APP_CONFIG.appName}] 사용량 가져오기 오류:`, error);
-      // 오류 시 기본값
-      return {
-        month: TonyConfig.getCurrentMonth(),
-        tokensUsed: 0,
-        lastReset: new Date().toISOString()
-      };
+      handleError('사용량 가져오기 오류', error);
+      return createDefaultUsage();
     }
+  }
+  
+  /**
+   * 기본 사용량 객체 생성
+   * @returns {Object} - 기본 사용량 객체
+   */
+  function createDefaultUsage() {
+    return {
+      month: TonyConfig.getCurrentMonth(),
+      tokensUsed: 0,
+      lastReset: new Date().toISOString()
+    };
+  }
+  
+  /**
+   * 사용량 스토리지에 저장
+   * @param {Object} usage - 사용량 객체
+   * @returns {Promise<boolean>} - 저장 성공 여부
+   */
+  async function saveUsageToStorage(usage) {
+    return new Promise((resolve) => {
+      chrome.storage.sync.set({ usage }, () => {
+        if (chrome.runtime.lastError) {
+          console.warn(`[${TonyConfig.APP_CONFIG.appName}] 사용량 저장 오류:`, chrome.runtime.lastError);
+          resolve(false);
+        } else {
+          resolve(true);
+        }
+      });
+    });
   }
   
   /**
@@ -104,22 +135,19 @@ const UsageManager = (function() {
         tokensUsed: newTokensUsed
       };
       
-      return new Promise((resolve) => {
-        chrome.storage.sync.set({ usage: newUsage }, () => {
-          // 이벤트 발생 (사용량 업데이트)
-          try {
-            TonyConfig.safeDispatchEvent('usage:updated', {
-              detail: { usage: newUsage }
-            });
-          } catch (eventError) {
-            console.error(`[${TonyConfig.APP_CONFIG.appName}] 이벤트 발생 오류:`, eventError);
-          }
-          
-          resolve(newUsage);
+      const saved = await saveUsageToStorage(newUsage);
+      
+      if (saved) {
+        // 이벤트 발생 (사용량 업데이트)
+        TonyConfig.safeDispatchEvent('usage:updated', {
+          usage: newUsage,
+          added: tokens
         });
-      });
+      }
+      
+      return newUsage;
     } catch (error) {
-      console.error(`[${TonyConfig.APP_CONFIG.appName}] 사용량 기록 오류:`, error);
+      handleError('사용량 기록 오류', error);
       return await getCurrentUsage();
     }
   }
@@ -137,28 +165,28 @@ const UsageManager = (function() {
       const subscription = await getCurrentSubscription();
       const limit = SUBSCRIPTION_LIMITS[subscription] || SUBSCRIPTION_LIMITS.FREE;
       
+      // 무제한 구독인 경우 항상 허용
+      if (subscription === 'UNLIMITED') {
+        return true;
+      }
+      
       const usage = await getCurrentUsage();
       
       // 현재 사용량 + 예상 토큰 <= 한도
       const isWithinLimit = (usage.tokensUsed + tokenCount) <= limit;
       
-      // 한도 초과 시 이벤트 발생
+      // 한도 초과 시 이벤트 발행
       if (!isWithinLimit) {
-        try {
-          TonyConfig.safeDispatchEvent('usage:limit-exceeded', {
-            detail: { 
-              required: tokenCount,
-              available: Math.max(0, limit - usage.tokensUsed)
-            }
-          });
-        } catch (eventError) {
-          console.error(`[${TonyConfig.APP_CONFIG.appName}] 이벤트 발생 오류:`, eventError);
-        }
+        TonyConfig.safeDispatchEvent('usage:limit-exceeded', {
+          required: tokenCount,
+          available: Math.max(0, limit - usage.tokensUsed),
+          limit: limit
+        });
       }
       
       return isWithinLimit;
     } catch (error) {
-      console.error(`[${TonyConfig.APP_CONFIG.appName}] 번역 가능 여부 확인 오류:`, error);
+      handleError('번역 가능 여부 확인 오류', error);
       return true; // 오류 시 기본적으로 번역 허용
     }
   }
@@ -182,33 +210,44 @@ const UsageManager = (function() {
         tokensUsed,
         limit: limit,
         remaining: Math.max(0, limit - tokensUsed),
-        percentage: Math.min(100, Math.round((tokensUsed / limit) * 100)),
+        percentage: calculatePercentage(tokensUsed, limit),
         lastReset: usage.lastReset || new Date().toISOString()
       };
       
       // 이벤트 발생 (사용량 통계 준비됨)
-      try {
-        TonyConfig.safeDispatchEvent('usage:stats-ready', {
-          detail: { stats }
-        });
-      } catch (eventError) {
-        console.error(`[${TonyConfig.APP_CONFIG.appName}] 이벤트 발생 오류:`, eventError);
-      }
+      TonyConfig.safeDispatchEvent('usage:stats-ready', { stats });
       
       return stats;
     } catch (error) {
-      console.error(`[${TonyConfig.APP_CONFIG.appName}] 사용량 통계 가져오기 오류:`, error);
-      
-      // 오류 시 기본 통계 반환
-      return {
-        subscription: 'FREE',
-        tokensUsed: 0,
-        limit: SUBSCRIPTION_LIMITS.FREE,
-        remaining: SUBSCRIPTION_LIMITS.FREE,
-        percentage: 0,
-        lastReset: new Date().toISOString()
-      };
+      handleError('사용량 통계 가져오기 오류', error);
+      return getDefaultStats();
     }
+  }
+  
+  /**
+   * 사용 비율 계산
+   * @param {number} used - 사용된 양
+   * @param {number} total - 전체 양
+   * @returns {number} - 백분율 (0-100)
+   */
+  function calculatePercentage(used, total) {
+    if (total === 0) return 0;
+    return Math.min(100, Math.round((used / total) * 100));
+  }
+  
+  /**
+   * 기본 사용량 통계 객체
+   * @returns {Object} - 기본 통계 객체
+   */
+  function getDefaultStats() {
+    return {
+      subscription: 'FREE',
+      tokensUsed: 0,
+      limit: SUBSCRIPTION_LIMITS.FREE,
+      remaining: SUBSCRIPTION_LIMITS.FREE,
+      percentage: 0,
+      lastReset: new Date().toISOString()
+    };
   }
   
   /**
@@ -239,7 +278,7 @@ const UsageManager = (function() {
       // 토큰 수 추정 및 10% 버퍼 추가
       return Math.ceil(wordCount * tokenRatio * 1.1);
     } catch (error) {
-      console.error(`[${TonyConfig.APP_CONFIG.appName}] 토큰 수 추정 오류:`, error);
+      handleError('토큰 수 추정 오류', error);
       
       // 최소한의 토큰 수 반환
       return texts && Array.isArray(texts) ? texts.length * 5 : 10;
@@ -268,19 +307,15 @@ const UsageManager = (function() {
           }
           
           // 이벤트 발생 (구독 업데이트)
-          try {
-            TonyConfig.safeDispatchEvent('subscription:updated', {
-              detail: { subscription: level }
-            });
-          } catch (eventError) {
-            console.error(`[${TonyConfig.APP_CONFIG.appName}] 이벤트 발생 오류:`, eventError);
-          }
+          TonyConfig.safeDispatchEvent('subscription:updated', {
+            subscription: level
+          });
           
           resolve(true);
         });
       });
     } catch (error) {
-      console.error(`[${TonyConfig.APP_CONFIG.appName}] 구독 설정 오류:`, error);
+      handleError('구독 설정 오류', error);
       return false;
     }
   }
@@ -296,37 +331,24 @@ const UsageManager = (function() {
       
       // 현재 저장된 월과 현재 월이 다르면 리셋
       if (usage.month !== currentMonth) {
-        const newUsage = {
-          month: currentMonth,
-          tokensUsed: 0,
-          lastReset: new Date().toISOString()
-        };
+        const newUsage = createDefaultUsage();
         
-        return new Promise((resolve) => {
-          chrome.storage.sync.set({ usage: newUsage }, () => {
-            if (chrome.runtime.lastError) {
-              console.warn(`[${TonyConfig.APP_CONFIG.appName}] 사용량 리셋 오류:`, chrome.runtime.lastError);
-              resolve(false);
-              return;
-            }
-            
-            // 이벤트 발생 (사용량 리셋)
-            try {
-              TonyConfig.safeDispatchEvent('usage:reset', {
-                detail: { usage: newUsage }
-              });
-            } catch (eventError) {
-              console.error(`[${TonyConfig.APP_CONFIG.appName}] 이벤트 발생 오류:`, eventError);
-            }
-            
-            resolve(true);
+        const saved = await saveUsageToStorage(newUsage);
+        
+        if (saved) {
+          // 이벤트 발생 (사용량 리셋)
+          TonyConfig.safeDispatchEvent('usage:reset', {
+            usage: newUsage,
+            prevMonth: usage.month
           });
-        });
+        }
+        
+        return saved;
       }
       
       return false;
     } catch (error) {
-      console.error(`[${TonyConfig.APP_CONFIG.appName}] 월별 사용량 리셋 체크 오류:`, error);
+      handleError('월별 사용량 리셋 체크 오류', error);
       return false;
     }
   }
@@ -340,18 +362,39 @@ const UsageManager = (function() {
     switch (subscription) {
       case 'BASIC':
         return "기본 ($5/월)";
+      case 'PRO':
+        return "프로 ($10/월)";
+      case 'UNLIMITED':
+        return "무제한";
       case 'FREE':
       default:
         return "무료";
     }
   }
   
-  // 초기화 - 사용량 캐싱 (시작 시 1회)
-  try {
-    getUsageStats();
-  } catch (initError) {
-    console.error(`[${TonyConfig.APP_CONFIG.appName}] 초기 사용량 캐싱 오류:`, initError);
+  /**
+   * 오류 처리
+   * @param {string} message - 오류 메시지
+   * @param {Error} error - 오류 객체
+   */
+  function handleError(message, error) {
+    console.error(`[${TonyConfig.APP_CONFIG.appName}] ${message}:`, error);
+    
+    // 오류 이벤트 발행
+    try {
+      TonyConfig.safeDispatchEvent('usage:error', {
+        message,
+        error: error.message
+      });
+    } catch (eventError) {
+      console.warn(`[${TonyConfig.APP_CONFIG.appName}] 이벤트 발행 오류:`, eventError);
+    }
   }
+  
+  // 초기화 - 사용량 캐싱 (시작 시 1회)
+  getUsageStats().catch(error => {
+    console.error(`[${TonyConfig.APP_CONFIG.appName}] 초기 사용량 캐싱 오류:`, error);
+  });
   
   // 공개 API
   return {

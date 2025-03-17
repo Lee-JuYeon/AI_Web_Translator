@@ -1,30 +1,27 @@
-// dom-observer.js - DOM 변화 관찰 및 IntersectionObserver 관리 모듈
-
+// dom-observer.js - TonyConfig 활용 리팩토링 버전
 const DOMObserver = (function() {
     'use strict';
-
+  
     try {
-        console.log("[번역 익스텐션] DOM Observer 모듈 로드 시작");
-        
-        // 모듈 로드 시 진단 정보 출력
-        window.addEventListener('error', function(event) {
-          if (event.filename && event.filename.includes('dom-observer.js')) {
-            console.error('[번역 익스텐션] DOM Observer 모듈 오류:', event.message);
-          }
-        });
-        
-        // 나머지 코드...
+      console.log(`[${TonyConfig.APP_CONFIG.appName}] DOM Observer 모듈 로드 시작`);
+      
+      // 모듈 로드 시 진단 정보 출력
+      window.addEventListener('error', function(event) {
+        if (event.filename && event.filename.includes('dom-observer.js')) {
+          console.error(`[${TonyConfig.APP_CONFIG.appName}] DOM Observer 모듈 오류:`, event.message);
+        }
+      });
     } catch (initError) {
-        console.error("[번역 익스텐션] DOM Observer 모듈 초기화 오류:", initError);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] DOM Observer 모듈 초기화 오류:`, initError);
     }
     
-    // 내부 설정 (기본값)
+    // 기본 설정 (TonyConfig에서 가져옴)
     const DEFAULT_SETTINGS = {
-      rootMargin: '200px',     // IntersectionObserver의 루트 마진
-      translatedAttr: 'data-tony-translated', // 번역 완료된 요소 속성
-      pendingAttr: 'data-tony-pending',       // 번역 대기 중인 요소 속성
-      observeAllOnInit: true,  // 초기화 시 모든 요소 관찰 여부
-      preloadThreshold: 0.1    // 요소가 보이는 기준 임계값 (10%)
+      rootMargin: '200px',
+      translatedAttr: TonyConfig.APP_CONFIG.domAttributes.translatedAttr,
+      pendingAttr: TonyConfig.APP_CONFIG.domAttributes.pendingAttr,
+      observeAllOnInit: true,
+      preloadThreshold: 0.1
     };
     
     // 현재 설정
@@ -32,36 +29,13 @@ const DOMObserver = (function() {
     
     // 상태 관리
     const state = {
-      intersectionObserver: null,    // IntersectionObserver 인스턴스
-      mutationObserver: null,        // MutationObserver 인스턴스
-      observedElements: new WeakSet(), // 이미 관찰 중인 요소 추적
-      isInitialized: false,          // 초기화 상태
-      isTranslating: false,          // 번역 중 상태
-      isEnabled: true                // 관찰 활성화 상태
+      intersectionObserver: null,
+      mutationObserver: null,
+      observedElements: new WeakSet(),
+      isInitialized: false,
+      isTranslating: false,
+      isEnabled: true
     };
-    
-    /**
-     * 안전한 이벤트 발행 함수
-     * @param {string} eventName - 이벤트 이름
-     * @param {Object} detail - 이벤트 detail 객체
-     * @returns {boolean} - 이벤트 발행 성공 여부
-     */
-    function safeDispatchEvent(eventName, detail = {}) {
-      try {
-        if (!state.isEnabled) {
-          return false;
-        }
-        
-        const event = new CustomEvent(eventName, { 
-          detail: detail || {} // null/undefined 방지
-        });
-        window.dispatchEvent(event);
-        return true;
-      } catch (error) {
-        console.error(`[번역 익스텐션] 이벤트 발행 오류 (${eventName}):`, error);
-        return false;
-      }
-    }
     
     /**
      * IntersectionObserver 초기화
@@ -80,9 +54,9 @@ const DOMObserver = (function() {
           }
         );
         
-        console.log("[번역 익스텐션] IntersectionObserver 초기화됨");
+        console.log(`[${TonyConfig.APP_CONFIG.appName}] IntersectionObserver 초기화됨`);
       } catch (error) {
-        console.error("[번역 익스텐션] IntersectionObserver 초기화 오류:", error);
+        handleError('IntersectionObserver 초기화 오류', error);
       }
     }
     
@@ -104,12 +78,12 @@ const DOMObserver = (function() {
             subtree: true     // 모든 하위 트리 변경 감지
           });
           
-          console.log("[번역 익스텐션] MutationObserver 초기화됨");
+          console.log(`[${TonyConfig.APP_CONFIG.appName}] MutationObserver 초기화됨`);
         } else {
-          console.warn("[번역 익스텐션] document.body가 준비되지 않았습니다.");
+          console.warn(`[${TonyConfig.APP_CONFIG.appName}] document.body가 준비되지 않았습니다.`);
         }
       } catch (error) {
-        console.error("[번역 익스텐션] MutationObserver 초기화 오류:", error);
+        handleError('MutationObserver 초기화 오류', error);
       }
     }
     
@@ -128,28 +102,36 @@ const DOMObserver = (function() {
         
         if (visibleEntries.length === 0) return;
         
-        console.log(`[번역 익스텐션] ${visibleEntries.length}개 요소가 화면에 보임`);
+        console.log(`[${TonyConfig.APP_CONFIG.appName}] ${visibleEntries.length}개 요소가 화면에 보임`);
         
         // 번역 대상 요소들
         const elementsToProcess = visibleEntries.map(entry => entry.target).filter(Boolean);
         
         // 화면에 보이는 요소들 처리 이벤트 발생
         if (elementsToProcess.length > 0) {
-          // 번역 대기 중으로 표시
-          elementsToProcess.forEach(element => {
-            if (element && !element.hasAttribute(settings.translatedAttr)) {
-              element.setAttribute(settings.pendingAttr, 'true');
-            }
-          });
-          
-          // 이벤트 발생
-          safeDispatchEvent('dom:elements-visible', { 
-            elements: elementsToProcess 
-          });
+          processVisibleElements(elementsToProcess);
         }
       } catch (error) {
-        console.error("[번역 익스텐션] Intersection 처리 오류:", error);
+        handleError('Intersection 처리 오류', error);
       }
+    }
+    
+    /**
+     * 화면에 보이는 요소 처리
+     * @param {Element[]} elements - 화면에 보이는 요소 배열
+     */
+    function processVisibleElements(elements) {
+      // 번역 대기 중으로 표시
+      elements.forEach(element => {
+        if (element && !element.hasAttribute(settings.translatedAttr)) {
+          element.setAttribute(settings.pendingAttr, 'true');
+        }
+      });
+      
+      // 이벤트 발생
+      safeDispatchEvent('dom:elements-visible', { 
+        elements: elements 
+      });
     }
     
     /**
@@ -162,39 +144,16 @@ const DOMObserver = (function() {
         // 번역 중이거나 비활성화 상태면 무시
         if (state.isTranslating || !state.isEnabled) return;
         
-        // 중요한 변경사항이 있는지 먼저 확인
-        let hasSignificantChanges = false;
-        
-        for (const mutation of mutations) {
-          if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
-            // 실제 요소 노드가 추가되었는지 확인
-            for (const node of mutation.addedNodes) {
-              if (node.nodeType === Node.ELEMENT_NODE) {
-                hasSignificantChanges = true;
-                break;
-              }
-            }
-            
-            if (hasSignificantChanges) break;
-          }
-        }
+        // 중요한 변경사항 여부 확인
+        const hasSignificantChanges = checkForSignificantChanges(mutations);
         
         // 중요한 변경사항이 없으면 건너뜀
         if (!hasSignificantChanges) return;
         
-        console.log("[번역 익스텐션] DOM 변경 감지됨, 새 텍스트 컨테이너 검색");
+        console.log(`[${TonyConfig.APP_CONFIG.appName}] DOM 변경 감지됨, 새 텍스트 컨테이너 검색`);
         
         // 새로 추가된 요소 찾기
-        const newElements = [];
-        mutations.forEach(mutation => {
-          if (mutation.type === 'childList') {
-            mutation.addedNodes.forEach(node => {
-              if (node.nodeType === Node.ELEMENT_NODE) {
-                newElements.push(node);
-              }
-            });
-          }
-        });
+        const newElements = findNewlyAddedElements(mutations);
         
         // 이벤트 발생
         if (newElements.length > 0) {
@@ -203,8 +162,46 @@ const DOMObserver = (function() {
           });
         }
       } catch (error) {
-        console.error("[번역 익스텐션] Mutation 처리 오류:", error);
+        handleError('Mutation 처리 오류', error);
       }
+    }
+    
+    /**
+     * 중요한 DOM 변경 확인
+     * @param {MutationRecord[]} mutations - 감지된 DOM 변경 사항
+     * @returns {boolean} - 중요한 변경 여부
+     */
+    function checkForSignificantChanges(mutations) {
+      for (const mutation of mutations) {
+        if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+          // 실제 요소 노드가 추가되었는지 확인
+          for (const node of mutation.addedNodes) {
+            if (node.nodeType === Node.ELEMENT_NODE) {
+              return true;
+            }
+          }
+        }
+      }
+      return false;
+    }
+    
+    /**
+     * 새로 추가된 요소 찾기
+     * @param {MutationRecord[]} mutations - 감지된 DOM 변경 사항
+     * @returns {Element[]} - 새로 추가된 요소 배열
+     */
+    function findNewlyAddedElements(mutations) {
+      const newElements = [];
+      mutations.forEach(mutation => {
+        if (mutation.type === 'childList') {
+          mutation.addedNodes.forEach(node => {
+            if (node.nodeType === Node.ELEMENT_NODE) {
+              newElements.push(node);
+            }
+          });
+        }
+      });
+      return newElements;
     }
     
     /**
@@ -226,7 +223,7 @@ const DOMObserver = (function() {
         if (!state.intersectionObserver) {
           initIntersectionObserver();
           if (!state.intersectionObserver) {
-            console.error("[번역 익스텐션] IntersectionObserver 초기화 실패");
+            console.error(`[${TonyConfig.APP_CONFIG.appName}] IntersectionObserver 초기화 실패`);
             return;
           }
         }
@@ -245,7 +242,7 @@ const DOMObserver = (function() {
         // 관찰 중인 요소로 추가
         state.observedElements.add(element);
       } catch (error) {
-        console.error("[번역 익스텐션] 요소 관찰 등록 오류:", error);
+        handleError('요소 관찰 등록 오류', error);
       }
     }
     
@@ -263,9 +260,9 @@ const DOMObserver = (function() {
           observeElement(element);
         });
         
-        console.log(`[번역 익스텐션] ${elements.length}개 요소 관찰 등록`);
+        console.log(`[${TonyConfig.APP_CONFIG.appName}] ${elements.length}개 요소 관찰 등록`);
       } catch (error) {
-        console.error("[번역 익스텐션] 요소들 관찰 등록 오류:", error);
+        handleError('요소들 관찰 등록 오류', error);
       }
     }
     
@@ -282,7 +279,7 @@ const DOMObserver = (function() {
           isTranslating: state.isTranslating 
         });
       } catch (error) {
-        console.error('[번역 익스텐션] 번역 상태 설정 오류:', error);
+        handleError('번역 상태 설정 오류', error);
       }
     }
     
@@ -300,7 +297,7 @@ const DOMObserver = (function() {
      */
     function setEnabled(isEnabled) {
       state.isEnabled = !!isEnabled; // 불리언 타입 강제
-      console.log(`[번역 익스텐션] DOM 관찰자 ${state.isEnabled ? '활성화' : '비활성화'}`);
+      console.log(`[${TonyConfig.APP_CONFIG.appName}] DOM 관찰자 ${state.isEnabled ? '활성화' : '비활성화'}`);
     }
     
     /**
@@ -325,10 +322,10 @@ const DOMObserver = (function() {
         // 초기화 완료 이벤트 발행
         safeDispatchEvent('dom:observer-initialized', { success: true });
         
-        console.log("[번역 익스텐션] DOM 관찰자 초기화 완료");
+        console.log(`[${TonyConfig.APP_CONFIG.appName}] DOM 관찰자 초기화 완료`);
         return true;
       } catch (error) {
-        console.error("[번역 익스텐션] DOM 관찰자 초기화 오류:", error);
+        handleError('DOM 관찰자 초기화 오류', error);
         return false;
       }
     }
@@ -336,12 +333,13 @@ const DOMObserver = (function() {
     /**
      * 화면에 현재 보이는 모든 요소 처리
      * 즉시 번역을 위해 현재 화면에 보이는 요소들을 가져옴
+     * @returns {Element[]} - 화면에 보이는 요소 배열
      */
     function processVisibleElements() {
       try {
         // DOMSelector 모듈이 필요함
         if (!window.DOMSelector) {
-          console.error("[번역 익스텐션] DOMSelector 모듈이 필요합니다.");
+          console.error(`[${TonyConfig.APP_CONFIG.appName}] DOMSelector 모듈이 필요합니다.`);
           return [];
         }
         
@@ -364,11 +362,11 @@ const DOMObserver = (function() {
               observeElement(element);
             }
           } catch (elementError) {
-            console.warn("[번역 익스텐션] 요소 가시성 확인 오류:", elementError);
+            console.warn(`[${TonyConfig.APP_CONFIG.appName}] 요소 가시성 확인 오류:`, elementError);
           }
         });
         
-        console.log(`[번역 익스텐션] 현재 화면에 보이는 ${visibleElements.length}개 요소 처리`);
+        console.log(`[${TonyConfig.APP_CONFIG.appName}] 현재 화면에 보이는 ${visibleElements.length}개 요소 처리`);
         
         // 화면에 보이는 요소 처리 이벤트 발행
         if (visibleElements.length > 0) {
@@ -379,7 +377,7 @@ const DOMObserver = (function() {
         
         return visibleElements;
       } catch (error) {
-        console.error("[번역 익스텐션] 화면에 보이는 요소 처리 오류:", error);
+        handleError('화면에 보이는 요소 처리 오류', error);
         return [];
       }
     }
@@ -395,6 +393,7 @@ const DOMObserver = (function() {
           return false;
         }
         
+        // 요소의 위치 및 크기 정보
         const rect = element.getBoundingClientRect();
         
         // 화면 크기
@@ -408,18 +407,30 @@ const DOMObserver = (function() {
         }
         
         // 요소의 스타일 확인
-        const style = window.getComputedStyle(element);
-        
-        // 화면에 표시되지 않는 경우
-        if (style.display === 'none' || style.visibility === 'hidden' || 
-            style.opacity === '0' || element.offsetParent === null) {
-          return false;
-        }
-        
-        return true;
+        return isElementDisplayed(element);
       } catch (error) {
-        console.error("[번역 익스텐션] 요소 가시성 확인 오류:", error);
+        handleError('요소 가시성 확인 오류', error);
         return false;
+      }
+    }
+    
+    /**
+     * 요소가 화면에 표시되는지 확인
+     * @param {Element} element - 확인할 요소
+     * @returns {boolean} - 표시 여부
+     */
+    function isElementDisplayed(element) {
+      const style = window.getComputedStyle(element);
+      
+      // 화면에 표시되지 않는 경우
+      switch (true) {
+        case (style.display === 'none'):
+        case (style.visibility === 'hidden'):
+        case (style.opacity === '0'):
+        case (element.offsetParent === null):
+          return false;
+        default:
+          return true;
       }
     }
     
@@ -429,33 +440,35 @@ const DOMObserver = (function() {
     function cleanup() {
       try {
         // IntersectionObserver 정리
-        if (state.intersectionObserver) {
-          try {
-            state.intersectionObserver.disconnect();
-          } catch (observerError) {
-            console.warn('[번역 익스텐션] IntersectionObserver 해제 오류:', observerError);
-          }
-          state.intersectionObserver = null;
-        }
+        cleanupObserver(state.intersectionObserver);
+        state.intersectionObserver = null;
         
         // MutationObserver 정리
-        if (state.mutationObserver) {
-          try {
-            state.mutationObserver.disconnect();
-          } catch (observerError) {
-            console.warn('[번역 익스텐션] MutationObserver 해제 오류:', observerError);
-          }
-          state.mutationObserver = null;
-        }
+        cleanupObserver(state.mutationObserver);
+        state.mutationObserver = null;
         
         // 상태 초기화
         state.observedElements = new WeakSet();
         state.isInitialized = false;
         state.isTranslating = false;
         
-        console.log('[번역 익스텐션] DOM 관찰자 정리 완료');
+        console.log(`[${TonyConfig.APP_CONFIG.appName}] DOM 관찰자 정리 완료`);
       } catch (error) {
-        console.error('[번역 익스텐션] DOM 관찰자 정리 오류:', error);
+        handleError('DOM 관찰자 정리 오류', error);
+      }
+    }
+    
+    /**
+     * 관찰자 정리
+     * @param {Observer} observer - 정리할 관찰자
+     */
+    function cleanupObserver(observer) {
+      if (observer) {
+        try {
+          observer.disconnect();
+        } catch (observerError) {
+          console.warn(`[${TonyConfig.APP_CONFIG.appName}] 관찰자 해제 오류:`, observerError);
+        }
       }
     }
     
@@ -470,26 +483,35 @@ const DOMObserver = (function() {
         const oldSettings = { ...settings };
         settings = { ...settings, ...newSettings };
         
-        // rootMargin이 변경된 경우 IntersectionObserver 재초기화
-        if (oldSettings.rootMargin !== settings.rootMargin ||
-            oldSettings.preloadThreshold !== settings.preloadThreshold) {
-          
-          // 기존 관찰자 해제
-          if (state.intersectionObserver) {
-            try {
-              state.intersectionObserver.disconnect();
-            } catch (observerError) {
-              console.warn('[번역 익스텐션] IntersectionObserver 해제 오류:', observerError);
-            }
-            state.intersectionObserver = null;
-          }
-          
-          // 새 설정으로 다시 초기화
-          initIntersectionObserver();
+        // 관찰자 설정이 변경된 경우 재초기화
+        if (shouldReinitializeObserver(oldSettings)) {
+          reinitializeIntersectionObserver();
         }
       } catch (error) {
-        console.error('[번역 익스텐션] 설정 업데이트 오류:', error);
+        handleError('설정 업데이트 오류', error);
       }
+    }
+    
+    /**
+     * 관찰자 재초기화 필요 여부 확인
+     * @param {Object} oldSettings - 이전 설정
+     * @returns {boolean} - 재초기화 필요 여부
+     */
+    function shouldReinitializeObserver(oldSettings) {
+      return oldSettings.rootMargin !== settings.rootMargin ||
+             oldSettings.preloadThreshold !== settings.preloadThreshold;
+    }
+    
+    /**
+     * IntersectionObserver 재초기화
+     */
+    function reinitializeIntersectionObserver() {
+      // 기존 관찰자 해제
+      cleanupObserver(state.intersectionObserver);
+      state.intersectionObserver = null;
+      
+      // 새 설정으로 다시 초기화
+      initIntersectionObserver();
     }
     
     /**
@@ -498,6 +520,45 @@ const DOMObserver = (function() {
      */
     function getSettings() {
       return { ...settings };
+    }
+    
+    /**
+     * 안전한 이벤트 발행 함수
+     * @param {string} eventName - 이벤트 이름
+     * @param {Object} detail - 이벤트 detail 객체
+     * @returns {boolean} - 이벤트 발행 성공 여부
+     */
+    function safeDispatchEvent(eventName, detail = {}) {
+      try {
+        if (!state.isEnabled) {
+          return false;
+        }
+        
+        TonyConfig.safeDispatchEvent(eventName, detail);
+        return true;
+      } catch (error) {
+        console.error(`[${TonyConfig.APP_CONFIG.appName}] 이벤트 발행 오류 (${eventName}):`, error);
+        return false;
+      }
+    }
+    
+    /**
+     * 오류 처리
+     * @param {string} message - 오류 메시지
+     * @param {Error} error - 오류 객체
+     */
+    function handleError(message, error) {
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] ${message}:`, error);
+      
+      // 오류 이벤트 발행
+      try {
+        TonyConfig.safeDispatchEvent('domobserver:error', {
+          message,
+          error: error.message
+        });
+      } catch (eventError) {
+        console.warn(`[${TonyConfig.APP_CONFIG.appName}] 오류 이벤트 발행 실패:`, eventError);
+      }
     }
     
     // 공개 API

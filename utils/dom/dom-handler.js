@@ -1,24 +1,23 @@
-// dom-handler.js - 개선된 DOM 처리 통합 모듈
-
+// dom-handler.js - TonyConfig 기반 리팩토링 버전
 const DOMHandler = (function() {
   'use strict';
   
-  // 기본 설정
+  // 기본 설정 (TonyConfig에서 가져옴)
   const DEFAULT_SETTINGS = {
-    textContainerSelector: 'p, h1, h2, h3, h4, h5, li, span, a, td, div, article', // 단순화
-    ignoreSelector: 'script, style, noscript, code, pre', // 단순화
-    minTextLength: 1,        // 번역할 최소 텍스트 길이 (1로 변경하여 더 많은 텍스트 포함)
-    rootMargin: '500px',     // IntersectionObserver의 루트 마진 (500px로 확장하여 더 많은 요소 미리 로드)
-    translatedAttr: 'data-tony-translated', // 번역 완료된 요소 속성
-    pendingAttr: 'data-tony-pending',       // 번역 대기 중인 요소 속성
-    sourceAttr: 'data-tony-source',         // 원본 텍스트 저장 속성
-    preloadThreshold: 0.01,  // 요소가 보이는 기준 임계값 (1%만 보여도 로드)
-    batchSize: 50,           // 배치당 항목 수 (증가)
-    maxConcurrentBatches: 3, // 최대 동시 실행 배치 수
-    translateFullPage: true, // 전체 페이지 번역 모드 활성화
-    immediateTranslation: true, // 즉시 번역 모드 활성화
-    observeAllOnInit: true,  // 초기화 시 모든 요소 관찰 (활성화)
-    autoRefresh: true        // 일정 시간마다 새로운 요소 자동 검색
+    textContainerSelector: 'p, h1, h2, h3, h4, h5, li, span, a, td, div, article',
+    ignoreSelector: 'script, style, noscript, code, pre',
+    minTextLength: TonyConfig.APP_CONFIG.defaultSettings.minTextLength || 2,
+    rootMargin: '500px',
+    translatedAttr: TonyConfig.APP_CONFIG.domAttributes.translatedAttr,
+    pendingAttr: TonyConfig.APP_CONFIG.domAttributes.pendingAttr,
+    sourceAttr: TonyConfig.APP_CONFIG.domAttributes.sourceAttr,
+    preloadThreshold: 0.01,
+    batchSize: TonyConfig.APP_CONFIG.defaultSettings.batchSize || 40,
+    maxConcurrentBatches: TonyConfig.APP_CONFIG.defaultSettings.maxConcurrentBatches || 3,
+    translateFullPage: TonyConfig.APP_CONFIG.defaultSettings.translateFullPage,
+    immediateTranslation: TonyConfig.APP_CONFIG.defaultSettings.immediateTranslation,
+    observeAllOnInit: true,
+    autoRefresh: true
   };
   
   // 현재 설정
@@ -26,34 +25,15 @@ const DOMHandler = (function() {
   
   // 상태 관리
   const state = {
-    isTranslating: false,          // 번역 중 상태
-    isInitialized: false,          // 초기화 상태
-    refreshTimer: null,            // 새로고침 타이머
-    fullPageRequested: false,      // 전체 페이지 번역 요청 상태
-    processingQueue: [],           // 처리 대기열
-    autoRefreshInterval: 5000,     // 자동 새로고침 간격 (ms)
-    lastElementCount: 0,           // 마지막 요소 수
-    lastProcessTime: 0             // 마지막 처리 시간
+    isTranslating: false,
+    isInitialized: false,
+    refreshTimer: null,
+    fullPageRequested: false,
+    processingQueue: [],
+    autoRefreshInterval: 5000,
+    lastElementCount: 0,
+    lastProcessTime: 0
   };
-  
-  /**
-   * 안전한 이벤트 발행 함수
-   * @param {string} eventName - 이벤트 이름
-   * @param {Object} detail - 이벤트 detail 객체
-   * @returns {boolean} - 이벤트 발행 성공 여부
-   */
-  function safeDispatchEvent(eventName, detail = {}) {
-    try {
-      const event = new CustomEvent(eventName, { 
-        detail: detail || {} // null/undefined 방지
-      });
-      window.dispatchEvent(event);
-      return true;
-    } catch (error) {
-      console.error(`[번역 익스텐션] 이벤트 발행 오류 (${eventName}):`, error);
-      return false;
-    }
-  }
   
   /**
    * 모듈 의존성 확인
@@ -72,32 +52,42 @@ const DOMHandler = (function() {
     const missing = dependencies.filter(dep => {
       const exists = typeof window[dep.name] !== 'undefined';
       if (!exists) {
-        console.error(`[번역 익스텐션] 필수 모듈 누락: ${dep.name}`);
+        console.error(`[${TonyConfig.APP_CONFIG.appName}] 필수 모듈 누락: ${dep.name}`);
       }
       return !exists;
     });
     
     if (missing.length > 0) {
       const missingNames = missing.map(dep => dep.name).join(', ');
-      console.error(`[번역 익스텐션] 필요한 모듈이 로드되지 않았습니다: ${missingNames}`);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 필요한 모듈이 로드되지 않았습니다: ${missingNames}`);
       
-      // 중요: 콘텐츠 스크립트에서 자동으로 모듈을 로드하도록 시도
-      try {
-        // 자동 모듈 로드 시도 - 이 부분은 크롬 확장 API를 통해 구현
-        if (typeof chrome !== 'undefined' && chrome.runtime) {
-          chrome.runtime.sendMessage({ 
-            action: "loadDependencies", 
-            dependencies: missing.map(dep => dep.name) 
-          });
-        }
-      } catch (e) {
-        console.warn("[번역 익스텐션] 모듈 로드 요청 실패:", e);
-      }
-      
-      return false;
+      // 누락된 모듈 로드 시도
+      return requestMissingModules(missing.map(dep => dep.name));
     }
     
     return true;
+  }
+
+  /**
+   * 누락된 모듈 로드 요청
+   * @param {string[]} missingModules - 누락된 모듈 이름 배열
+   * @returns {boolean} - 요청 성공 여부
+   */
+  function requestMissingModules(missingModules) {
+    if (!TonyConfig.isExtensionContextValid() || !missingModules.length) {
+      return false;
+    }
+    
+    try {
+      chrome.runtime.sendMessage({ 
+        action: "loadScripts", 
+        dependencies: missingModules 
+      });
+      return false; // 비동기 로드가 진행 중이므로 아직은 false 반환
+    } catch (e) {
+      console.warn(`[${TonyConfig.APP_CONFIG.appName}] 모듈 로드 요청 실패:`, e);
+      return false;
+    }
   }
 
   /**
@@ -113,7 +103,7 @@ const DOMHandler = (function() {
       
       // DOMSelector 의존성 확인
       if (!window.DOMSelector) {
-        console.error("[번역 익스텐션] DOMSelector 모듈이 필요합니다.");
+        console.error(`[${TonyConfig.APP_CONFIG.appName}] DOMSelector 모듈이 필요합니다.`);
         return [];
       }
       
@@ -136,15 +126,15 @@ const DOMHandler = (function() {
             }
           }
         } catch (elementError) {
-          console.warn("[번역 익스텐션] 요소 텍스트 노드 추출 오류:", elementError);
+          console.warn(`[${TonyConfig.APP_CONFIG.appName}] 요소 텍스트 노드 추출 오류:`, elementError);
         }
       });
       
-      console.log(`[번역 익스텐션] ${elements.length}개 요소에서 ${allTextNodes.length}개 텍스트 노드 추출됨`);
+      console.log(`[${TonyConfig.APP_CONFIG.appName}] ${elements.length}개 요소에서 ${allTextNodes.length}개 텍스트 노드 추출됨`);
       
       return allTextNodes;
     } catch (error) {
-      console.error("[번역 익스텐션] 텍스트 노드 준비 오류:", error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 텍스트 노드 준비 오류:`, error);
       return [];
     }
   }
@@ -159,7 +149,7 @@ const DOMHandler = (function() {
     try {
       // 입력 검증
       if (!textNodes || !Array.isArray(textNodes) || textNodes.length === 0) {
-        console.warn("[번역 익스텐션] 번역할 텍스트 노드가 없습니다.");
+        console.warn(`[${TonyConfig.APP_CONFIG.appName}] 번역할 텍스트 노드가 없습니다.`);
         return 0;
       }
       
@@ -177,103 +167,160 @@ const DOMHandler = (function() {
       });
       
       try {
+        // UsageManager를 통한 사용량 확인 (가용 여부)
+        if (window.UsageManager) {
+          const estimatedTokens = window.UsageManager.estimateTokens(textNodes.map(item => item.text || ""));
+          const canProceed = await window.UsageManager.canTranslate(estimatedTokens);
+          
+          if (!canProceed) {
+            console.warn(`[${TonyConfig.APP_CONFIG.appName}] 번역 한도 초과로 번역 중단`);
+            state.isTranslating = false;
+            return 0;
+          }
+        }
+        
         // 번역할 텍스트 배열 준비
         const textsToTranslate = textNodes.map(item => item.text || "");
         
         // BatchEngine 설정
-        window.BatchEngine.updateSettings({
-          batchSize: settings.batchSize,
-          maxConcurrentBatches: settings.maxConcurrentBatches,
-          autoDeduplication: true,
-          useCache: true
-        });
+        configureBatchEngine();
         
         // 번역 콜백 함수 설정
-        window.BatchEngine.setItemProcessor(async (text) => {
-          // TranslatorService 모듈이 있는지 확인
-          if (!window.TranslatorService) {
-            throw new Error("TranslatorService 모듈이 필요합니다.");
-          }
-          
-          // 번역 서비스 호출
-          try {
-            const result = await window.TranslatorService.translateText(text);
-            return {
-              original: text,
-              translated: result || text
-            };
-          } catch (error) {
-            console.warn("[번역 익스텐션] 텍스트 번역 오류:", error);
-            return {
-              original: text,
-              translated: null
-            };
-          }
-        });
-        
-        // 배치 완료 콜백
-        window.BatchEngine.onBatchComplete(({results, batchIndex}) => {
-          // 필요한 경우 배치 완료 처리
-          safeDispatchEvent('dom:batch-complete', {
-            batchIndex,
-            count: results.length
-          });
-        });
-        
-        // 진행 상태 콜백
-        window.BatchEngine.onProgress((progress) => {
-          // 진행 상태 이벤트 발행
-          safeDispatchEvent('dom:translation-progress', {
-            progress
-          });
-        });
+        setupTranslationCallbacks();
         
         // 배치 처리 시작
         const translatedResults = await window.BatchEngine.processBatches(textsToTranslate);
         
         // 결과를 텍스트 노드 정보와 결합
-        const translationItems = textNodes.map((nodeInfo, index) => {
-          return {
-            ...nodeInfo,
-            original: nodeInfo.text,
-            translated: translatedResults[index]?.translated || nodeInfo.text
-          };
-        });
+        const translationItems = combineResultsWithNodes(textNodes, translatedResults);
         
         // 번역 결과를 DOM에 적용
-        const replacedCount = window.DOMManipulator.applyTranslations(translationItems);
+        const replacedCount = applyTranslations(translationItems, elements);
         
-        // 번역 대상 요소들을 번역 완료로 표시
-        if (Array.isArray(elements) && elements.length > 0) {
-          window.DOMManipulator.markElementsAsTranslated(elements);
+        // 사용량 기록 (UsageManager 사용)
+        if (window.UsageManager && replacedCount > 0) {
+          const tokensUsed = window.UsageManager.estimateTokens(textsToTranslate);
+          await window.UsageManager.recordUsage(tokensUsed);
         }
-        
-        // 번역 완료 이벤트 발행
-        safeDispatchEvent('dom:translation-complete', {
-          count: replacedCount,
-          total: textNodes.length
-        });
-        
-        // 완료 후 상태 업데이트
-        state.isTranslating = false;
         
         return replacedCount;
       } catch (error) {
-        console.error("[번역 익스텐션] 텍스트 노드 번역 오류:", error);
-        
-        // 번역 오류 이벤트 발행
-        safeDispatchEvent('dom:translation-error', {
-          error: error.message
-        });
-        
-        state.isTranslating = false;
+        handleTranslationError(error);
         return 0;
+      } finally {
+        state.isTranslating = false;
       }
     } catch (error) {
-      console.error("[번역 익스텐션] 번역 프로세스 오류:", error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 번역 프로세스 오류:`, error);
       state.isTranslating = false;
       return 0;
     }
+  }
+  
+  /**
+   * BatchEngine 설정
+   */
+  function configureBatchEngine() {
+    window.BatchEngine.updateSettings({
+      batchSize: settings.batchSize,
+      maxConcurrentBatches: settings.maxConcurrentBatches,
+      autoDeduplication: true,
+      useCache: true
+    });
+  }
+  
+  /**
+   * 번역 콜백 함수 설정
+   */
+  function setupTranslationCallbacks() {
+    // 번역 콜백 함수 설정
+    window.BatchEngine.setItemProcessor(async (text) => {
+      // TranslatorService 모듈이 있는지 확인
+      if (!window.TranslatorService) {
+        throw new Error("TranslatorService 모듈이 필요합니다.");
+      }
+      
+      // 번역 서비스 호출
+      try {
+        const result = await window.TranslatorService.translateText(text);
+        return {
+          original: text,
+          translated: result || text
+        };
+      } catch (error) {
+        console.warn(`[${TonyConfig.APP_CONFIG.appName}] 텍스트 번역 오류:`, error);
+        return {
+          original: text,
+          translated: null
+        };
+      }
+    });
+    
+    // 배치 완료 콜백
+    window.BatchEngine.onBatchComplete(({results, batchIndex}) => {
+      safeDispatchEvent('dom:batch-complete', {
+        batchIndex,
+        count: results.length
+      });
+    });
+    
+    // 진행 상태 콜백
+    window.BatchEngine.onProgress((progress) => {
+      safeDispatchEvent('dom:translation-progress', { progress });
+    });
+  }
+  
+  /**
+   * 번역 결과와 노드 정보 결합
+   * @param {Array} textNodes - 텍스트 노드 정보 배열
+   * @param {Array} translatedResults - 번역 결과 배열
+   * @returns {Array} - 결합된 번역 항목
+   */
+  function combineResultsWithNodes(textNodes, translatedResults) {
+    return textNodes.map((nodeInfo, index) => {
+      return {
+        ...nodeInfo,
+        original: nodeInfo.text,
+        translated: translatedResults[index]?.translated || nodeInfo.text
+      };
+    });
+  }
+  
+  /**
+   * 번역 결과 DOM에 적용
+   * @param {Array} translationItems - 번역 항목
+   * @param {Array} elements - 번역할 요소 배열
+   * @returns {number} - 적용된 번역 수
+   */
+  function applyTranslations(translationItems, elements) {
+    // 번역 결과를 DOM에 적용
+    const replacedCount = window.DOMManipulator.applyTranslations(translationItems);
+    
+    // 번역 대상 요소들을 번역 완료로 표시
+    if (Array.isArray(elements) && elements.length > 0) {
+      window.DOMManipulator.markElementsAsTranslated(elements);
+    }
+    
+    // 번역 완료 이벤트 발행
+    safeDispatchEvent('dom:translation-complete', {
+      count: replacedCount,
+      total: translationItems.length
+    });
+    
+    return replacedCount;
+  }
+  
+  /**
+   * 번역 오류 처리
+   * @param {Error} error - 발생한 오류
+   */
+  function handleTranslationError(error) {
+    console.error(`[${TonyConfig.APP_CONFIG.appName}] 텍스트 노드 번역 오류:`, error);
+    
+    // 번역 오류 이벤트 발행
+    safeDispatchEvent('dom:translation-error', {
+      error: error.message
+    });
   }
   
   /**
@@ -288,7 +335,7 @@ const DOMHandler = (function() {
         return;
       }
       
-      console.log(`[번역 익스텐션] ${elements.length}개 요소가 화면에 보임`);
+      console.log(`[${TonyConfig.APP_CONFIG.appName}] ${elements.length}개 요소가 화면에 보임`);
       
       // 요소에서 텍스트 노드 추출
       const textNodes = prepareTextNodes(elements);
@@ -299,10 +346,10 @@ const DOMHandler = (function() {
       
       // 텍스트 노드가 있는 경우 번역 시작
       translateTextNodes(textNodes, elements).catch(error => {
-        console.error("[번역 익스텐션] 요소 번역 오류:", error);
+        console.error(`[${TonyConfig.APP_CONFIG.appName}] 요소 번역 오류:`, error);
       });
     } catch (error) {
-      console.error("[번역 익스텐션] 요소 가시성 이벤트 처리 오류:", error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 요소 가시성 이벤트 처리 오류:`, error);
     }
   }
   
@@ -320,7 +367,7 @@ const DOMHandler = (function() {
       
       // DOMSelector, DOMObserver 의존성 확인
       if (!window.DOMSelector || !window.DOMObserver) {
-        console.error("[번역 익스텐션] DOMSelector, DOMObserver 모듈이 필요합니다.");
+        console.error(`[${TonyConfig.APP_CONFIG.appName}] DOMSelector, DOMObserver 모듈이 필요합니다.`);
         return;
       }
       
@@ -336,7 +383,7 @@ const DOMHandler = (function() {
             allContainers.push(...containers);
           }
         } catch (elementError) {
-          console.warn("[번역 익스텐션] 요소 텍스트 컨테이너 탐색 오류:", elementError);
+          console.warn(`[${TonyConfig.APP_CONFIG.appName}] 요소 텍스트 컨테이너 탐색 오류:`, elementError);
         }
       });
       
@@ -344,25 +391,46 @@ const DOMHandler = (function() {
         return;
       }
       
-      console.log(`[번역 익스텐션] ${elements.length}개 요소에서 ${allContainers.length}개 텍스트 컨테이너 발견`);
+      console.log(`[${TonyConfig.APP_CONFIG.appName}] ${elements.length}개 요소에서 ${allContainers.length}개 텍스트 컨테이너 발견`);
       
-      // 전체 페이지 번역 모드에서는 즉시 번역
-      if (settings.translateFullPage && settings.immediateTranslation) {
-        // 요소에서 텍스트 노드 추출
-        const textNodes = prepareTextNodes(allContainers);
-        
-        if (textNodes.length > 0) {
-          // 텍스트 노드가 있는 경우 번역 시작
-          translateTextNodes(textNodes, allContainers).catch(error => {
-            console.error("[번역 익스텐션] 요소 번역 오류:", error);
-          });
-        }
-      } else {
-        // 관찰자에 등록 (화면에 보일 때 번역)
-        window.DOMObserver.observeElements(allContainers);
-      }
+      // 처리 방식 결정 (즉시 번역 또는 관찰)
+      processNewContainers(allContainers);
     } catch (error) {
-      console.error("[번역 익스텐션] 요소 추가 이벤트 처리 오류:", error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 요소 추가 이벤트 처리 오류:`, error);
+    }
+  }
+  
+  /**
+   * 새로운 텍스트 컨테이너 처리
+   * @param {Element[]} containers - 텍스트 컨테이너 배열
+   */
+  function processNewContainers(containers) {
+    switch (true) {
+      // 전체 페이지 번역 + 즉시 번역 모드
+      case (settings.translateFullPage && settings.immediateTranslation):
+        immediatelyTranslateContainers(containers);
+        break;
+        
+      // 기본 모드 (관찰자에 등록)
+      default:
+        window.DOMObserver.observeElements(containers);
+        break;
+    }
+  }
+  
+  /**
+   * 컨테이너 즉시 번역
+   * @param {Element[]} containers - 텍스트 컨테이너 배열
+   */
+  function immediatelyTranslateContainers(containers) {
+    // 요소에서 텍스트 노드 추출
+    const textNodes = prepareTextNodes(containers);
+    
+    if (textNodes.length > 0) {
+      // 텍스트 노드가 있는 경우 번역 시작
+      translateTextNodes(textNodes, containers).catch(error => {
+        console.error(`[${TonyConfig.APP_CONFIG.appName}] 요소 번역 오류:`, error);
+      });
     }
   }
   
@@ -372,14 +440,18 @@ const DOMHandler = (function() {
   function setupEventListeners() {
     try {
       // 요소 가시성 변경 이벤트 리스너
-      window.addEventListener('dom:elements-visible', handleElementsVisible);
+      window.addEventListener('dom:elements-visible', 
+        TonyConfig.createSafeEventListener('dom:elements-visible', handleElementsVisible)
+      );
       
       // 요소 추가 이벤트 리스너
-      window.addEventListener('dom:elements-added', handleElementsAdded);
+      window.addEventListener('dom:elements-added', 
+        TonyConfig.createSafeEventListener('dom:elements-added', handleElementsAdded)
+      );
       
-      console.log("[번역 익스텐션] 이벤트 리스너 설정 완료");
+      console.log(`[${TonyConfig.APP_CONFIG.appName}] 이벤트 리스너 설정 완료`);
     } catch (error) {
-      console.error("[번역 익스텐션] 이벤트 리스너 설정 오류:", error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 이벤트 리스너 설정 오류:`, error);
     }
   }
   
@@ -391,7 +463,7 @@ const DOMHandler = (function() {
     try {
       // 이미 번역 중인 경우
       if (state.isTranslating) {
-        console.warn("[번역 익스텐션] 이미 번역 중입니다.");
+        console.warn(`[${TonyConfig.APP_CONFIG.appName}] 이미 번역 중입니다.`);
         return 0;
       }
       
@@ -412,13 +484,13 @@ const DOMHandler = (function() {
         const allTextNodes = window.DOMSelector.extractAllTextNodes();
         
         if (allTextNodes.length === 0) {
-          console.warn("[번역 익스텐션] 번역할 텍스트가 없습니다.");
+          console.warn(`[${TonyConfig.APP_CONFIG.appName}] 번역할 텍스트가 없습니다.`);
           state.isTranslating = false;
           state.fullPageRequested = false;
           return 0;
         }
         
-        console.log(`[번역 익스텐션] 전체 페이지에서 ${allTextNodes.length}개 텍스트 노드 발견`);
+        console.log(`[${TonyConfig.APP_CONFIG.appName}] 전체 페이지에서 ${allTextNodes.length}개 텍스트 노드 발견`);
         
         // 모든 텍스트 노드 번역
         const translateCount = await translateTextNodes(allTextNodes);
@@ -429,25 +501,36 @@ const DOMHandler = (function() {
           total: allTextNodes.length
         });
         
-        // 완료 후 상태 업데이트
-        state.isTranslating = false;
-        state.fullPageRequested = false;
+        // UI 이벤트 발행 (UIManager 사용)
+        if (window.UIManager) {
+          TonyConfig.safeDispatchEvent('translation:complete', {
+            summary: {
+              totalElements: document.querySelectorAll(`[${settings.translatedAttr}]`).length,
+              translatedElements: document.querySelectorAll(`[${settings.translatedAttr}]`).length,
+              totalTexts: allTextNodes.length,
+              translatedTexts: translateCount,
+              elapsedTime: Date.now() - state.lastProcessTime
+            }
+          });
+        }
         
         return translateCount;
       } catch (error) {
-        console.error("[번역 익스텐션] 전체 페이지 번역 오류:", error);
+        console.error(`[${TonyConfig.APP_CONFIG.appName}] 전체 페이지 번역 오류:`, error);
         
         // 번역 오류 이벤트 발행
         safeDispatchEvent('dom:full-page-translation-error', {
           error: error.message
         });
         
+        return 0;
+      } finally {
+        // 완료 후 상태 업데이트
         state.isTranslating = false;
         state.fullPageRequested = false;
-        return 0;
       }
     } catch (error) {
-      console.error("[번역 익스텐션] 전체 페이지 번역 프로세스 오류:", error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 전체 페이지 번역 프로세스 오류:`, error);
       state.isTranslating = false;
       state.fullPageRequested = false;
       return 0;
@@ -462,7 +545,7 @@ const DOMHandler = (function() {
     try {
       // 이미 번역 중인 경우
       if (state.isTranslating) {
-        console.warn("[번역 익스텐션] 이미 번역 중입니다.");
+        console.warn(`[${TonyConfig.APP_CONFIG.appName}] 이미 번역 중입니다.`);
         return 0;
       }
       
@@ -475,7 +558,7 @@ const DOMHandler = (function() {
       const visibleElements = window.DOMObserver.processVisibleElements();
       
       if (visibleElements.length === 0) {
-        console.warn("[번역 익스텐션] 현재 화면에 번역할 요소가 없습니다.");
+        console.warn(`[${TonyConfig.APP_CONFIG.appName}] 현재 화면에 번역할 요소가 없습니다.`);
         return 0;
       }
       
@@ -483,14 +566,17 @@ const DOMHandler = (function() {
       const textNodes = prepareTextNodes(visibleElements);
       
       if (textNodes.length === 0) {
-        console.warn("[번역 익스텐션] 현재 화면에 번역할 텍스트가 없습니다.");
+        console.warn(`[${TonyConfig.APP_CONFIG.appName}] 현재 화면에 번역할 텍스트가 없습니다.`);
         return 0;
       }
+      
+      // 처리 시작 시간 기록
+      state.lastProcessTime = Date.now();
       
       // 텍스트 노드 번역
       return await translateTextNodes(textNodes, visibleElements);
     } catch (error) {
-      console.error("[번역 익스텐션] 화면에 보이는 요소 번역 오류:", error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 화면에 보이는 요소 번역 오류:`, error);
       return 0;
     }
   }
@@ -517,65 +603,71 @@ const DOMHandler = (function() {
       state.autoRefreshInterval = interval;
       
       state.refreshTimer = setInterval(() => {
-        try {
-          // 번역 중인 경우 건너뜀
-          if (state.isTranslating) {
-            return;
-          }
-          
-          // 페이지 내 텍스트 컨테이너 검색
-          if (window.DOMSelector) {
-            const containers = window.DOMSelector.findTextContainers(document.body);
-            
-            // 이전 검색과 동일한 수의 요소인 경우 건너뜀
-            if (containers.length === state.lastElementCount) {
-              return;
-            }
-            
-            state.lastElementCount = containers.length;
-            
-            // 전체 페이지 번역 모드에서만 새로운 요소 자동 번역
-            if (settings.translateFullPage && settings.immediateTranslation) {
-              // 미번역 요소 필터링
-              const untranslatedElements = containers.filter(element => 
-                !element.hasAttribute(settings.translatedAttr) && 
-                !element.hasAttribute(settings.pendingAttr)
-              );
-              
-              if (untranslatedElements.length > 0) {
-                console.log(`[번역 익스텐션] 자동 새로고침: ${untranslatedElements.length}개 미번역 요소 발견`);
-                
-                // 요소에서 텍스트 노드 추출
-                const textNodes = prepareTextNodes(untranslatedElements);
-                
-                if (textNodes.length > 0) {
-                  // 텍스트 노드 번역
-                  translateTextNodes(textNodes, untranslatedElements).catch(error => {
-                    console.error("[번역 익스텐션] 자동 새로고침 번역 오류:", error);
-                  });
-                }
-              }
-            } else if (window.DOMObserver) {
-              // 새로운 요소 관찰자에 등록
-              const untranslatedElements = containers.filter(element => 
-                !element.hasAttribute(settings.translatedAttr) && 
-                !element.hasAttribute(settings.pendingAttr)
-              );
-              
-              if (untranslatedElements.length > 0) {
-                console.log(`[번역 익스텐션] 자동 새로고침: ${untranslatedElements.length}개 미번역 요소 관찰 등록`);
-                window.DOMObserver.observeElements(untranslatedElements);
-              }
-            }
-          }
-        } catch (refreshError) {
-          console.warn("[번역 익스텐션] 자동 새로고침 오류:", refreshError);
-        }
+        processAutoRefreshCycle();
       }, interval);
       
-      console.log(`[번역 익스텐션] 자동 새로고침 활성화 (${interval}ms 간격)`);
+      console.log(`[${TonyConfig.APP_CONFIG.appName}] 자동 새로고침 활성화 (${interval}ms 간격)`);
     } catch (error) {
-      console.error("[번역 익스텐션] 자동 새로고침 설정 오류:", error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 자동 새로고침 설정 오류:`, error);
+    }
+  }
+  
+  /**
+   * 자동 새로고침 주기 처리
+   */
+  function processAutoRefreshCycle() {
+    try {
+      // 번역 중인 경우 건너뜀
+      if (state.isTranslating) {
+        return;
+      }
+      
+      // 페이지 내 텍스트 컨테이너 검색
+      if (window.DOMSelector) {
+        const containers = window.DOMSelector.findTextContainers(document.body);
+        
+        // 이전 검색과 동일한 수의 요소인 경우 건너뜀
+        if (containers.length === state.lastElementCount) {
+          return;
+        }
+        
+        state.lastElementCount = containers.length;
+        
+        // 미번역 요소 필터링
+        const untranslatedElements = containers.filter(element => 
+          !element.hasAttribute(settings.translatedAttr) && 
+          !element.hasAttribute(settings.pendingAttr)
+        );
+        
+        if (untranslatedElements.length === 0) {
+          return;
+        }
+        
+        // 모드에 따른 처리
+        processUntranslatedElements(untranslatedElements);
+      }
+    } catch (refreshError) {
+      console.warn(`[${TonyConfig.APP_CONFIG.appName}] 자동 새로고침 오류:`, refreshError);
+    }
+  }
+  
+  /**
+   * 미번역 요소 처리
+   * @param {Element[]} elements - 미번역 요소 배열
+   */
+  function processUntranslatedElements(elements) {
+    switch (true) {
+      // 전체 페이지 번역 + 즉시 번역 모드
+      case (settings.translateFullPage && settings.immediateTranslation):
+        console.log(`[${TonyConfig.APP_CONFIG.appName}] 자동 새로고침: ${elements.length}개 미번역 요소 발견`);
+        immediatelyTranslateContainers(elements);
+        break;
+        
+      // 나머지 모드 (관찰자 등록)
+      default:
+        console.log(`[${TonyConfig.APP_CONFIG.appName}] 자동 새로고침: ${elements.length}개 미번역 요소 관찰 등록`);
+        window.DOMObserver.observeElements(elements);
+        break;
     }
   }
   
@@ -596,25 +688,7 @@ const DOMHandler = (function() {
       }
       
       // 의존 모듈 설정 업데이트
-      window.DOMSelector.updateSettings({
-        minTextLength: settings.minTextLength,
-        translatedAttr: settings.translatedAttr,
-        pendingAttr: settings.pendingAttr
-      });
-      
-      window.DOMObserver.updateSettings({
-        rootMargin: settings.rootMargin,
-        preloadThreshold: settings.preloadThreshold,
-        translatedAttr: settings.translatedAttr,
-        pendingAttr: settings.pendingAttr,
-        observeAllOnInit: settings.observeAllOnInit
-      });
-      
-      window.DOMManipulator.updateSettings({
-        translatedAttr: settings.translatedAttr,
-        pendingAttr: settings.pendingAttr,
-        sourceAttr: settings.sourceAttr
-      });
+      updateDependentModuleSettings();
       
       // 이벤트 리스너 설정
       setupEventListeners();
@@ -627,37 +701,71 @@ const DOMHandler = (function() {
         setupAutoRefresh(true, state.autoRefreshInterval);
       }
       
-      // 즉시 번역 모드에서 페이지 로드 시 번역 시작
-      if (settings.translateFullPage && settings.immediateTranslation) {
-        // 약간의 지연 후 전체 페이지 번역 시작 (페이지 로드 완료 보장)
-        setTimeout(() => {
-          translateFullPage().catch(error => {
-            console.error("[번역 익스텐션] 초기 페이지 번역 오류:", error);
-          });
-        }, 500);
-      } else {
-        // 화면에 보이는 요소만 번역
-        setTimeout(() => {
-          translateVisibleElements().catch(error => {
-            console.error("[번역 익스텐션] 초기 화면 번역 오류:", error);
-          });
-        }, 500);
-      }
+      // 초기화 모드에 따른 처리
+      handleInitialTranslation();
       
       // 초기화 상태 설정
       state.isInitialized = true;
       
       // 초기화 이벤트 발행
-      safeDispatchEvent('dom:initialized', {
-        settings
-      });
+      safeDispatchEvent('dom:initialized', { settings });
       
-      console.log("[번역 익스텐션] DOM 핸들러 초기화 완료");
+      console.log(`[${TonyConfig.APP_CONFIG.appName}] DOM 핸들러 초기화 완료`);
       return true;
     } catch (error) {
-      console.error("[번역 익스텐션] DOM 핸들러 초기화 오류:", error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] DOM 핸들러 초기화 오류:`, error);
       return false;
     }
+  }
+  
+  /**
+   * 의존 모듈 설정 업데이트
+   */
+  function updateDependentModuleSettings() {
+    window.DOMSelector.updateSettings({
+      minTextLength: settings.minTextLength,
+      translatedAttr: settings.translatedAttr,
+      pendingAttr: settings.pendingAttr
+    });
+    
+    window.DOMObserver.updateSettings({
+      rootMargin: settings.rootMargin,
+      preloadThreshold: settings.preloadThreshold,
+      translatedAttr: settings.translatedAttr,
+      pendingAttr: settings.pendingAttr,
+      observeAllOnInit: settings.observeAllOnInit
+    });
+    
+    window.DOMManipulator.updateSettings({
+      translatedAttr: settings.translatedAttr,
+      pendingAttr: settings.pendingAttr,
+      sourceAttr: settings.sourceAttr
+    });
+  }
+  
+  /**
+   * 초기 번역 처리
+   */
+  function handleInitialTranslation() {
+    // 약간의 지연 후 초기 번역 시작 (페이지 로드 완료 보장)
+    setTimeout(() => {
+      // 초기 모드에 따른 처리
+      switch (true) {
+        // 전체 페이지 번역 + 즉시 번역 모드
+        case (settings.translateFullPage && settings.immediateTranslation):
+          translateFullPage().catch(error => {
+            console.error(`[${TonyConfig.APP_CONFIG.appName}] 초기 페이지 번역 오류:`, error);
+          });
+          break;
+          
+        // 기본 모드 (화면에 보이는 요소만 번역)
+        default:
+          translateVisibleElements().catch(error => {
+            console.error(`[${TonyConfig.APP_CONFIG.appName}] 초기 화면 번역 오류:`, error);
+          });
+          break;
+      }
+    }, 500);
   }
   
   /**
@@ -678,7 +786,7 @@ const DOMHandler = (function() {
         window.DOMObserver.setTranslatingState(state.isTranslating);
       }
     } catch (error) {
-      console.error("[번역 익스텐션] 번역 상태 설정 오류:", error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 번역 상태 설정 오류:`, error);
     }
   }
   
@@ -707,37 +815,34 @@ const DOMHandler = (function() {
       
       // 모듈 의존성 확인
       if (checkDependencies()) {
-        // 관련 모듈 초기화
-        if (window.DOMObserver) {
-          window.DOMObserver.cleanup();
-        }
-        
-        if (window.DOMSelector) {
-          window.DOMSelector.resetAllTranslationAttributes();
-        }
-        
-        if (window.DOMManipulator) {
-          window.DOMManipulator.resetTranslatedElements();
-        }
-        
-        // 모든 번역 관련 속성 제거 (인라인 백업)
-        document.querySelectorAll(`[${settings.translatedAttr}], [${settings.pendingAttr}]`).forEach(element => {
-          try {
-            element.removeAttribute(settings.translatedAttr);
-            element.removeAttribute(settings.pendingAttr);
-          } catch (attrError) {
-            // 속성 제거 오류는 무시
-          }
-        });
+        resetDependentModules();
       }
       
       // 상태 초기화
       state.isInitialized = false;
       state.lastElementCount = 0;
       
-      console.log("[번역 익스텐션] 번역 상태 초기화 완료");
+      console.log(`[${TonyConfig.APP_CONFIG.appName}] 번역 상태 초기화 완료`);
     } catch (error) {
-      console.error("[번역 익스텐션] 번역 상태 초기화 오류:", error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 번역 상태 초기화 오류:`, error);
+    }
+  }
+  
+  /**
+   * 의존 모듈 초기화
+   */
+  function resetDependentModules() {
+    // 관련 모듈 초기화
+    if (window.DOMObserver) {
+      window.DOMObserver.cleanup();
+    }
+    
+    if (window.DOMSelector) {
+      window.DOMSelector.resetAllTranslationAttributes();
+    }
+    
+    if (window.DOMManipulator) {
+      window.DOMManipulator.resetTranslatedElements();
     }
   }
   
@@ -754,24 +859,11 @@ const DOMHandler = (function() {
       
       // 모듈 의존성 확인
       if (checkDependencies()) {
-        // 각 모듈 정리
-        if (window.DOMObserver) {
-          window.DOMObserver.cleanup();
-        }
-        
-        if (window.BatchEngine) {
-          // 진행 중인 배치 처리 중단
-          window.BatchEngine.abort();
-        }
+        cleanupDependentModules();
       }
       
       // 이벤트 리스너 제거
-      try {
-        window.removeEventListener('dom:elements-visible', handleElementsVisible);
-        window.removeEventListener('dom:elements-added', handleElementsAdded);
-      } catch (listenerError) {
-        console.warn('[번역 익스텐션] 이벤트 리스너 제거 오류:', listenerError);
-      }
+      removeEventListeners();
       
       // 상태 초기화
       state.isInitialized = false;
@@ -779,9 +871,36 @@ const DOMHandler = (function() {
       state.fullPageRequested = false;
       state.lastElementCount = 0;
       
-      console.log('[번역 익스텐션] 리소스 정리 완료');
+      console.log(`[${TonyConfig.APP_CONFIG.appName}] 리소스 정리 완료`);
     } catch (error) {
-      console.error('[번역 익스텐션] 리소스 정리 오류:', error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 리소스 정리 오류:`, error);
+    }
+  }
+  
+  /**
+   * 의존 모듈 정리
+   */
+  function cleanupDependentModules() {
+    // 각 모듈 정리
+    if (window.DOMObserver) {
+      window.DOMObserver.cleanup();
+    }
+    
+    if (window.BatchEngine) {
+      // 진행 중인 배치 처리 중단
+      window.BatchEngine.abort();
+    }
+  }
+  
+  /**
+   * 이벤트 리스너 제거
+   */
+  function removeEventListeners() {
+    try {
+      window.removeEventListener('dom:elements-visible', handleElementsVisible);
+      window.removeEventListener('dom:elements-added', handleElementsAdded);
+    } catch (listenerError) {
+      console.warn(`[${TonyConfig.APP_CONFIG.appName}] 이벤트 리스너 제거 오류:`, listenerError);
     }
   }
   
@@ -798,39 +917,7 @@ const DOMHandler = (function() {
       
       // 모듈 의존성 확인
       if (state.isInitialized && checkDependencies()) {
-        // 각 모듈에 설정 전달
-        if (window.DOMSelector) {
-          window.DOMSelector.updateSettings({
-            minTextLength: settings.minTextLength,
-            translatedAttr: settings.translatedAttr,
-            pendingAttr: settings.pendingAttr
-          });
-        }
-        
-        if (window.DOMObserver) {
-          window.DOMObserver.updateSettings({
-            rootMargin: settings.rootMargin,
-            preloadThreshold: settings.preloadThreshold,
-            translatedAttr: settings.translatedAttr,
-            pendingAttr: settings.pendingAttr,
-            observeAllOnInit: settings.observeAllOnInit
-          });
-        }
-        
-        if (window.DOMManipulator) {
-          window.DOMManipulator.updateSettings({
-            translatedAttr: settings.translatedAttr,
-            pendingAttr: settings.pendingAttr,
-            sourceAttr: settings.sourceAttr
-          });
-        }
-        
-        if (window.BatchEngine) {
-          window.BatchEngine.updateSettings({
-            batchSize: settings.batchSize,
-            maxConcurrentBatches: settings.maxConcurrentBatches
-          });
-        }
+        updateDependentModuleSettings();
         
         // 자동 새로고침 설정 업데이트
         if (oldSettings.autoRefresh !== settings.autoRefresh || 
@@ -839,9 +926,9 @@ const DOMHandler = (function() {
         }
       }
       
-      console.log('[번역 익스텐션] 설정 업데이트 완료');
+      console.log(`[${TonyConfig.APP_CONFIG.appName}] 설정 업데이트 완료`);
     } catch (error) {
-      console.error('[번역 익스텐션] 설정 업데이트 오류:', error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 설정 업데이트 오류:`, error);
     }
   }
   
@@ -893,10 +980,19 @@ const DOMHandler = (function() {
         window.DOMManipulator.setDebugMode(!!enabled);
       }
       
-      console.log(`[번역 익스텐션] 디버그 모드 ${enabled ? '활성화' : '비활성화'}`);
+      console.log(`[${TonyConfig.APP_CONFIG.appName}] 디버그 모드 ${enabled ? '활성화' : '비활성화'}`);
     } catch (error) {
-      console.error('[번역 익스텐션] 디버그 모드 설정 오류:', error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 디버그 모드 설정 오류:`, error);
     }
+  }
+  
+  /**
+   * 안전한 이벤트 발행
+   * @param {string} eventName - 이벤트 이름
+   * @param {Object} detail - 이벤트 상세 정보
+   */
+  function safeDispatchEvent(eventName, detail = {}) {
+    TonyConfig.safeDispatchEvent(eventName, detail);
   }
   
   // 공개 API
@@ -919,4 +1015,4 @@ const DOMHandler = (function() {
 })();
 
 // 모듈 내보내기
-window.DOMHandler = DOMHandler; // utils/dom-handler.js - 이벤트 발행 부분 중점 개선
+window.DOMHandler = DOMHandler;

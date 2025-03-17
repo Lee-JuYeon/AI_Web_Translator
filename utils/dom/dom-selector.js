@@ -1,16 +1,16 @@
-// dom-selector.js - DOM 요소 선택 및 탐색 기능을 담당하는 모듈
-
+// dom-selector.js - TonyConfig 활용 리팩토링 버전
 const DOMSelector = (function() {
     'use strict';
     
-    // 내부 설정 (기본값)
+    // 기본 설정 (TonyConfig에서 가져옴)
     const DEFAULT_SETTINGS = {
-        minTextLength: 2,
-        textContainerSelector: 'p, h1, h2, h3, h4, h5, li, span, a, td, div, article', // 단순화
-        ignoreSelector: 'script, style, noscript, code, pre', // 단순화translatedAttr: 'data-tony-translated',
-        pendingAttr: 'data-tony-pending',
-        sourceAttr: 'data-tony-source',
-        additionalSelector: '.text, .title, .headline, .desc, .content, .caption, .summary, .article-txt, .article-tit'
+      minTextLength: TonyConfig.APP_CONFIG.defaultSettings.minTextLength || 2,
+      textContainerSelector: 'p, h1, h2, h3, h4, h5, li, span, a, td, div, article',
+      ignoreSelector: 'script, style, noscript, code, pre',
+      translatedAttr: TonyConfig.APP_CONFIG.domAttributes.translatedAttr,
+      pendingAttr: TonyConfig.APP_CONFIG.domAttributes.pendingAttr,
+      sourceAttr: TonyConfig.APP_CONFIG.domAttributes.sourceAttr,
+      additionalSelector: '.text, .title, .headline, .desc, .content, .caption, .summary, .article-txt, .article-tit'
     };
     
     // 현재 설정
@@ -27,62 +27,120 @@ const DOMSelector = (function() {
           return false;
         }
         
-        // 이미 번역되었거나 번역 대기 중인 요소는 제외
-        if (element.hasAttribute(settings.translatedAttr) || 
-            element.hasAttribute(settings.pendingAttr)) {
+        // 상태 확인 (번역 완료 또는 대기 중인 요소 제외)
+        if (hasTranslationAttributes(element)) {
           return false;
         }
         
-        // 무시할 선택자에 매칭되는 요소는 제외
-        try {
-          if (element.matches && element.matches(settings.ignoreSelector)) {
-            return false;
-          }
-        } catch (matchError) {
-          console.warn("[번역 익스텐션] matches 함수 오류:", matchError);
-        }
-        
-        // 최소 길이 이상의 텍스트 내용이 있는지 확인
-        let hasTextContent = false;
-        try {
-          const text = element.textContent.trim();
-          hasTextContent = text.length >= settings.minTextLength;
-        } catch (textContentError) {
-          console.warn("[번역 익스텐션] textContent 접근 오류:", textContentError);
-        }
-        
-        if (!hasTextContent) {
+        // 무시할 선택자에 매칭되는 요소 제외
+        if (matchesSelector(element, settings.ignoreSelector)) {
           return false;
         }
         
-        // 자식 텍스트 노드 확인
-        let hasTextNodeChildren = false;
-        try {
-          hasTextNodeChildren = Array.from(element.childNodes).some(
-            node => node.nodeType === Node.TEXT_NODE && 
-                   node.textContent && 
-                   node.textContent.trim().length >= settings.minTextLength
-          );
-        } catch (childrenError) {
-          console.warn("[번역 익스텐션] 자식 노드 확인 오류:", childrenError);
+        // 요소 내 텍스트 길이 확인
+        if (!hasMinimumTextContent(element)) {
+          return false;
         }
         
-        // 속성에 텍스트가 있는지 확인
-        let hasAttrText = false;
-        try {
-          hasAttrText = ['title', 'alt', 'placeholder', 'aria-label'].some(
-            attr => element.hasAttribute && 
-                   element.hasAttribute(attr) && 
-                   element.getAttribute(attr) && 
-                   element.getAttribute(attr).trim().length >= settings.minTextLength
-          );
-        } catch (attrError) {
-          console.warn("[번역 익스텐션] 속성 확인 오류:", attrError);
-        }
-        
-        return hasTextContent && (hasTextNodeChildren || hasAttrText);
+        // 텍스트 노드 및 속성 확인
+        return hasTextNodesOrAttributes(element);
       } catch (error) {
-        console.error("[번역 익스텐션] 텍스트 컨테이너 확인 오류:", error);
+        handleError('텍스트 컨테이너 확인 오류', error);
+        return false;
+      }
+    }
+    
+    /**
+     * 번역 관련 속성 확인
+     * @param {Element} element - 확인할 요소
+     * @returns {boolean} - 번역 속성 존재 여부
+     */
+    function hasTranslationAttributes(element) {
+      return element.hasAttribute(settings.translatedAttr) || 
+             element.hasAttribute(settings.pendingAttr);
+    }
+    
+    /**
+     * 선택자 매칭 여부 확인 (안전하게)
+     * @param {Element} element - 확인할 요소
+     * @param {string} selector - CSS 선택자
+     * @returns {boolean} - 매칭 여부
+     */
+    function matchesSelector(element, selector) {
+      try {
+        if (!element.matches || !isValidSelector(selector)) {
+          return false;
+        }
+        return element.matches(selector);
+      } catch (matchError) {
+        console.warn(`[${TonyConfig.APP_CONFIG.appName}] matches 함수 오류:`, matchError);
+        return false;
+      }
+    }
+    
+    /**
+     * 최소 텍스트 길이 충족 여부 확인
+     * @param {Element} element - 확인할 요소
+     * @returns {boolean} - 최소 길이 충족 여부
+     */
+    function hasMinimumTextContent(element) {
+      try {
+        const text = element.textContent.trim();
+        return text.length >= settings.minTextLength;
+      } catch (textContentError) {
+        console.warn(`[${TonyConfig.APP_CONFIG.appName}] textContent 접근 오류:`, textContentError);
+        return false;
+      }
+    }
+    
+    /**
+     * 텍스트 노드 또는 속성 확인
+     * @param {Element} element - 확인할 요소
+     * @returns {boolean} - 텍스트 노드 또는 속성 존재 여부
+     */
+    function hasTextNodesOrAttributes(element) {
+      // 자식 텍스트 노드 확인
+      const hasTextNodes = checkTextNodes(element);
+      
+      // 속성 텍스트 확인
+      const hasAttributes = checkTextAttributes(element);
+      
+      return hasTextNodes || hasAttributes;
+    }
+    
+    /**
+     * 텍스트 노드 확인
+     * @param {Element} element - 확인할 요소
+     * @returns {boolean} - 의미 있는 텍스트 노드 존재 여부
+     */
+    function checkTextNodes(element) {
+      try {
+        return Array.from(element.childNodes).some(
+          node => node.nodeType === Node.TEXT_NODE && 
+                 node.textContent && 
+                 node.textContent.trim().length >= settings.minTextLength
+        );
+      } catch (childrenError) {
+        console.warn(`[${TonyConfig.APP_CONFIG.appName}] 자식 노드 확인 오류:`, childrenError);
+        return false;
+      }
+    }
+    
+    /**
+     * 텍스트 속성 확인
+     * @param {Element} element - 확인할 요소
+     * @returns {boolean} - 의미 있는 텍스트 속성 존재 여부
+     */
+    function checkTextAttributes(element) {
+      try {
+        return ['title', 'alt', 'placeholder', 'aria-label'].some(
+          attr => element.hasAttribute && 
+                 element.hasAttribute(attr) && 
+                 element.getAttribute(attr) && 
+                 element.getAttribute(attr).trim().length >= settings.minTextLength
+        );
+      } catch (attrError) {
+        console.warn(`[${TonyConfig.APP_CONFIG.appName}] 속성 확인 오류:`, attrError);
         return false;
       }
     }
@@ -93,37 +151,29 @@ const DOMSelector = (function() {
      * @param {string} selector - CSS 선택자
      * @returns {boolean} - 매칭되는 부모 존재 여부
      */
-    
     function hasParentMatching(node, selector) {
-        try {
-        if (!node || !selector) return false;
-        
-        // 선택자 유효성 검사
-        if (!isValidSelector(selector)) {
-            return false; // 유효하지 않은 선택자인 경우 즉시 반환
-        }
-        
+      // 선택자가 유효하지 않으면 즉시 반환
+      if (!node || !selector || !isValidSelector(selector)) {
+        return false;
+      }
+      
+      try {
         let parent = node.parentNode;
-        
+      
         while (parent && parent !== document.body) {
-            if (parent.nodeType === Node.ELEMENT_NODE) {
-            try {
-                if (parent.matches && parent.matches(selector)) {
-                return true;
-                }
-            } catch (matchError) {
-                console.warn("[번역 익스텐션] matches 함수 오류:", matchError);
-                // 오류가 발생해도 계속 진행
+          if (parent.nodeType === Node.ELEMENT_NODE) {
+            if (safeMatches(parent, selector)) {
+              return true;
             }
-            }
-            parent = parent.parentNode;
+          }
+          parent = parent.parentNode;
         }
         
         return false;
-        } catch (error) {
-        console.error("[번역 익스텐션] 부모 노드 확인 오류:", error);
+      } catch (error) {
+        handleError('부모 노드 확인 오류', error);
         return false;
-        }
+      }
     }
     
     /**
@@ -139,104 +189,131 @@ const DOMSelector = (function() {
         
         const textNodes = [];
         
-        // TreeWalker로 요소 내 모든 텍스트 노드 탐색
-        try {
-          const walker = document.createTreeWalker(
-            element,
-            NodeFilter.SHOW_TEXT,
-            {
-              acceptNode: function(node) {
-                // 무시할 요소의 자식인 경우 제외
-                if (hasParentMatching(node, settings.ignoreSelector)) {
-                  return NodeFilter.FILTER_REJECT;
-                }
-                
-                // 텍스트 노드의 내용이 있는 경우만 포함
-                const text = node.textContent.trim();
-                if (text.length >= settings.minTextLength) {
-                  return NodeFilter.FILTER_ACCEPT;
-                }
-                
-                return NodeFilter.FILTER_SKIP;
-              }
-            }
-          );
-          
-          // TreeWalker로 노드 탐색
-          let node;
-          while (node = walker.nextNode()) {
-            try {
-              const text = node.textContent.trim();
-              if (text) {
-                textNodes.push({
-                  node,
-                  text,
-                  type: 'text',
-                  element: node.parentElement
-                });
-              }
-            } catch (nodeError) {
-              console.warn("[번역 익스텐션] 텍스트 노드 처리 오류:", nodeError);
-            }
-          }
-        } catch (walkerError) {
-          console.error("[번역 익스텐션] TreeWalker 오류:", walkerError);
-        }
+        // TreeWalker로 요소 내 텍스트 노드 탐색
+        extractTextNodesWithTreeWalker(element, textNodes);
         
-        // 속성에 있는 텍스트 (title, alt, placeholder 등) 추가
-        try {
-          ['title', 'alt', 'placeholder', 'aria-label'].forEach(attr => {
-            try {
-              if (element.hasAttribute && element.hasAttribute(attr)) {
-                const text = element.getAttribute(attr).trim();
-                if (text && text.length >= settings.minTextLength) {
-                  textNodes.push({
-                    node: element,
-                    text: text,
-                    type: 'attribute',
-                    attribute: attr,
-                    element: element
-                  });
-                }
-              }
-              
-              // 하위 요소의 속성도 확인
-              try {
-                const elements = element.querySelectorAll(`[${attr}]`);
-                elements.forEach(el => {
-                  try {
-                    if (el && el.hasAttribute && el.hasAttribute(attr)) {
-                      const text = el.getAttribute(attr).trim();
-                      if (text && text.length >= settings.minTextLength) {
-                        textNodes.push({
-                          node: el,
-                          text: text,
-                          type: 'attribute',
-                          attribute: attr,
-                          element: el
-                        });
-                      }
-                    }
-                  } catch (attrNodeError) {
-                    console.warn(`[번역 익스텐션] 속성 '${attr}' 노드 처리 오류:`, attrNodeError);
-                  }
-                });
-              } catch (querySelectorError) {
-                console.warn(`[번역 익스텐션] 속성 선택자 오류:`, querySelectorError);
-              }
-              
-            } catch (attrError) {
-              console.warn(`[번역 익스텐션] 속성 '${attr}' 처리 오류:`, attrError);
-            }
-          });
-        } catch (attrsError) {
-          console.error("[번역 익스텐션] 속성 처리 오류:", attrsError);
-        }
+        // 속성 텍스트 추출
+        extractTextAttributes(element, textNodes);
         
         return textNodes;
       } catch (error) {
-        console.error("[번역 익스텐션] 텍스트 노드 추출 오류:", error);
+        handleError('텍스트 노드 추출 오류', error);
         return [];
+      }
+    }
+    
+    /**
+     * TreeWalker를 사용한 텍스트 노드 추출
+     * @param {Element} element - 대상 요소
+     * @param {Array} textNodes - 추출 결과 배열
+     */
+    function extractTextNodesWithTreeWalker(element, textNodes) {
+      try {
+        const walker = document.createTreeWalker(
+          element,
+          NodeFilter.SHOW_TEXT,
+          {
+            acceptNode: function(node) {
+              // 무시할 요소의 자식인 경우 제외
+              if (hasParentMatching(node, settings.ignoreSelector)) {
+                return NodeFilter.FILTER_REJECT;
+              }
+              
+              // 텍스트 노드의 내용이 있는 경우만 포함
+              const text = node.textContent.trim();
+              if (text.length >= settings.minTextLength) {
+                return NodeFilter.FILTER_ACCEPT;
+              }
+              
+              return NodeFilter.FILTER_SKIP;
+            }
+          }
+        );
+        
+        // TreeWalker로 노드 탐색
+        let node;
+        while (node = walker.nextNode()) {
+          try {
+            const text = node.textContent.trim();
+            if (text) {
+              textNodes.push({
+                node,
+                text,
+                type: 'text',
+                element: node.parentElement
+              });
+            }
+          } catch (nodeError) {
+            console.warn(`[${TonyConfig.APP_CONFIG.appName}] 텍스트 노드 처리 오류:`, nodeError);
+          }
+        }
+      } catch (walkerError) {
+        console.error(`[${TonyConfig.APP_CONFIG.appName}] TreeWalker 오류:`, walkerError);
+      }
+    }
+    
+    /**
+     * 속성 텍스트 추출
+     * @param {Element} element - 대상 요소
+     * @param {Array} textNodes - 추출 결과 배열
+     */
+    function extractTextAttributes(element, textNodes) {
+      const textAttributes = ['title', 'alt', 'placeholder', 'aria-label'];
+      
+      try {
+        // 요소 자체의 속성 확인
+        textAttributes.forEach(attr => {
+          extractAttributeFromElement(element, attr, textNodes);
+        });
+        
+        // 하위 요소의 속성 확인
+        textAttributes.forEach(attr => {
+          extractAttributesFromChildren(element, attr, textNodes);
+        });
+      } catch (attrsError) {
+        console.error(`[${TonyConfig.APP_CONFIG.appName}] 속성 처리 오류:`, attrsError);
+      }
+    }
+    
+    /**
+     * 요소의 속성 텍스트 추출
+     * @param {Element} element - 대상 요소
+     * @param {string} attr - 속성 이름
+     * @param {Array} textNodes - 추출 결과 배열
+     */
+    function extractAttributeFromElement(element, attr, textNodes) {
+      try {
+        if (element.hasAttribute && element.hasAttribute(attr)) {
+          const text = element.getAttribute(attr).trim();
+          if (text && text.length >= settings.minTextLength) {
+            textNodes.push({
+              node: element,
+              text: text,
+              type: 'attribute',
+              attribute: attr,
+              element: element
+            });
+          }
+        }
+      } catch (attrError) {
+        console.warn(`[${TonyConfig.APP_CONFIG.appName}] 속성 '${attr}' 처리 오류:`, attrError);
+      }
+    }
+    
+    /**
+     * 하위 요소의 속성 텍스트 추출
+     * @param {Element} element - 대상 요소
+     * @param {string} attr - 속성 이름
+     * @param {Array} textNodes - 추출 결과 배열
+     */
+    function extractAttributesFromChildren(element, attr, textNodes) {
+      try {
+        const elements = element.querySelectorAll(`[${attr}]`);
+        elements.forEach(el => {
+          extractAttributeFromElement(el, attr, textNodes);
+        });
+      } catch (querySelectorError) {
+        console.warn(`[${TonyConfig.APP_CONFIG.appName}] 속성 선택자 오류:`, querySelectorError);
       }
     }
     
@@ -254,8 +331,7 @@ const DOMSelector = (function() {
         const containers = [];
         
         // 이미 번역된 요소는 건너뜀
-        if (root.hasAttribute(settings.translatedAttr) || 
-            root.hasAttribute(settings.pendingAttr)) {
+        if (hasTranslationAttributes(root)) {
           return containers;
         }
         
@@ -264,42 +340,50 @@ const DOMSelector = (function() {
           containers.push(root);
         }
         
-        // 선택자 확장 (결합)
-        const fullSelector = `${settings.textContainerSelector}, ${settings.additionalSelector}`;
-        
-        // 텍스트 컨테이너 선택자로 하위 요소 검색
-        try {
-          const elements = root.querySelectorAll(fullSelector);
-          
-          elements.forEach(element => {
-            try {
-              // 이미 번역되었거나 번역 대기 중인 요소는 건너뜀
-              if (element.hasAttribute(settings.translatedAttr) || 
-                  element.hasAttribute(settings.pendingAttr)) {
-                return;
-              }
-              
-              // 무시할 선택자에 매칭되는 요소는 제외
-              if (element.matches && element.matches(settings.ignoreSelector)) {
-                return;
-              }
-              
-              // 실제 텍스트가 있는 요소만 추가
-              if (element.textContent && element.textContent.trim().length >= settings.minTextLength) {
-                containers.push(element);
-              }
-            } catch (elementError) {
-              console.warn("[번역 익스텐션] 컨테이너 요소 처리 오류:", elementError);
-            }
-          });
-        } catch (querySelectorError) {
-          console.error("[번역 익스텐션] querySelector 오류:", querySelectorError);
-        }
+        // 특정 선택자로 하위 요소 검색
+        findContainersBySelector(root, containers);
         
         return containers;
       } catch (error) {
-        console.error("[번역 익스텐션] 텍스트 컨테이너 탐색 오류:", error);
+        handleError('텍스트 컨테이너 탐색 오류', error);
         return [];
+      }
+    }
+    
+    /**
+     * 선택자로 텍스트 컨테이너 검색
+     * @param {Element} root - 검색 시작점 요소
+     * @param {Array} containers - 결과 저장 배열
+     */
+    function findContainersBySelector(root, containers) {
+      try {
+        // 선택자 확장 (결합)
+        const fullSelector = `${settings.textContainerSelector}, ${settings.additionalSelector}`;
+        
+        const elements = root.querySelectorAll(fullSelector);
+        
+        elements.forEach(element => {
+          try {
+            // 번역 관련 속성이 있는 요소는 제외
+            if (hasTranslationAttributes(element)) {
+              return;
+            }
+            
+            // 무시할 선택자에 매칭되는 요소는 제외
+            if (matchesSelector(element, settings.ignoreSelector)) {
+              return;
+            }
+            
+            // 텍스트 내용이 있는 요소만 추가
+            if (hasMinimumTextContent(element)) {
+              containers.push(element);
+            }
+          } catch (elementError) {
+            console.warn(`[${TonyConfig.APP_CONFIG.appName}] 컨테이너 요소 처리 오류:`, elementError);
+          }
+        });
+      } catch (querySelectorError) {
+        console.error(`[${TonyConfig.APP_CONFIG.appName}] querySelector 오류:`, querySelectorError);
       }
     }
     
@@ -313,16 +397,14 @@ const DOMSelector = (function() {
         if (!selector || typeof selector !== 'string') return [];
         
         // 선택자 유효성 검사
-        try {
-          document.createDocumentFragment().querySelector(selector);
-        } catch (selectorError) {
-          console.warn(`[번역 익스텐션] 잘못된 선택자: ${selector}`, selectorError);
+        if (!isValidSelector(selector)) {
+          console.warn(`[${TonyConfig.APP_CONFIG.appName}] 잘못된 선택자: ${selector}`);
           return [];
         }
         
         return document.querySelectorAll(selector);
       } catch (error) {
-        console.error('[번역 익스텐션] 요소 검색 오류:', error);
+        handleError('요소 검색 오류', error);
         return [];
       }
     }
@@ -337,16 +419,14 @@ const DOMSelector = (function() {
         if (!selector || typeof selector !== 'string') return null;
         
         // 선택자 유효성 검사
-        try {
-          document.createDocumentFragment().querySelector(selector);
-        } catch (selectorError) {
-          console.warn(`[번역 익스텐션] 잘못된 선택자: ${selector}`, selectorError);
+        if (!isValidSelector(selector)) {
+          console.warn(`[${TonyConfig.APP_CONFIG.appName}] 잘못된 선택자: ${selector}`);
           return null;
         }
         
         return document.querySelector(selector);
       } catch (error) {
-        console.error('[번역 익스텐션] 요소 검색 오류:', error);
+        handleError('요소 검색 오류', error);
         return null;
       }
     }
@@ -368,12 +448,65 @@ const DOMSelector = (function() {
           textNodes.push(...nodes);
         });
         
-        console.log(`[번역 익스텐션] 전체 페이지에서 ${textNodes.length}개 텍스트 노드 추출됨`);
+        console.log(`[${TonyConfig.APP_CONFIG.appName}] 전체 페이지에서 ${textNodes.length}개 텍스트 노드 추출됨`);
       } catch (error) {
-        console.error('[번역 익스텐션] 전체 텍스트 노드 추출 오류:', error);
+        handleError('전체 텍스트 노드 추출 오류', error);
       }
       
       return textNodes;
+    }
+    
+    /**
+     * 선택자 유효성 검사
+     * @param {string} selector - CSS 선택자
+     * @returns {boolean} - 유효성 여부
+     */
+    function isValidSelector(selector) {
+      try {
+        // 빈 선택자나 null 체크
+        if (!selector || typeof selector !== 'string' || selector.trim() === '') {
+          return false;
+        }
+        
+        // 선택자에 특수문자가 포함된 경우 추가 검증
+        if (selector.includes('(') || selector.includes(')') || 
+            selector.includes('[') || selector.includes(']')) {
+          // 복잡한 선택자 검증은 더 안전한 방법으로
+          try {
+            document.querySelector(selector);
+            return true;
+          } catch (e) {
+            console.warn(`[${TonyConfig.APP_CONFIG.appName}] 복잡한 선택자 검증 실패: ${selector}`, e);
+            return false;
+          }
+        }
+        
+        // 기본 검증
+        document.createDocumentFragment().querySelector(selector);
+        return true;
+      } catch (error) {
+        console.warn(`[${TonyConfig.APP_CONFIG.appName}] 유효하지 않은 선택자: ${selector}`, error);
+        return false;
+      }
+    }
+    
+    /**
+     * 안전한 matches 메서드 호출
+     * @param {Element} element - 대상 요소
+     * @param {string} selector - CSS 선택자
+     * @returns {boolean} - 매칭 여부
+     */
+    function safeMatches(element, selector) {
+      if (!element || !element.matches || !isValidSelector(selector)) {
+        return false;
+      }
+      
+      try {
+        return element.matches(selector);
+      } catch (error) {
+        console.warn(`[${TonyConfig.APP_CONFIG.appName}] matches 함수 오류:`, error);
+        return false;
+      }
     }
     
     /**
@@ -383,9 +516,35 @@ const DOMSelector = (function() {
     function updateSettings(newSettings) {
       try {
         if (!newSettings) return;
+        
+        // 이전 설정 백업
+        const oldSettings = { ...settings };
+        
+        // 새 설정 적용
         settings = { ...settings, ...newSettings };
+        
+        // 변경 사항 로깅
+        logSettingsChanges(oldSettings);
       } catch (error) {
-        console.error('[번역 익스텐션] 설정 업데이트 오류:', error);
+        handleError('설정 업데이트 오류', error);
+      }
+    }
+    
+    /**
+     * 설정 변경 사항 로깅
+     * @param {Object} oldSettings - 이전 설정
+     */
+    function logSettingsChanges(oldSettings) {
+      const changedSettings = {};
+      
+      Object.entries(settings).forEach(([key, value]) => {
+        if (oldSettings[key] !== value) {
+          changedSettings[key] = value;
+        }
+      });
+      
+      if (Object.keys(changedSettings).length > 0) {
+        console.log(`[${TonyConfig.APP_CONFIG.appName}] DOMSelector 설정 변경:`, changedSettings);
       }
     }
     
@@ -399,116 +558,74 @@ const DOMSelector = (function() {
     
     /**
      * 모든 번역 관련 속성 초기화
+     * @returns {number} - 초기화된 요소 수
      */
     function resetAllTranslationAttributes() {
       try {
+        let resetCount = 0;
+        
         // 번역된 요소 데이터 속성 제거
-        document.querySelectorAll(`[${settings.translatedAttr}]`).forEach(element => {
-          try {
-            if (element && element.removeAttribute) {
-              element.removeAttribute(settings.translatedAttr);
-            }
-          } catch (attrError) {
-            console.warn('[번역 익스텐션] 속성 제거 오류:', attrError);
-          }
-        });
+        resetCount += resetAttributeFromElements(settings.translatedAttr);
         
         // 대기 중인 요소 데이터 속성 제거
-        document.querySelectorAll(`[${settings.pendingAttr}]`).forEach(element => {
-          try {
-            if (element && element.removeAttribute) {
-              element.removeAttribute(settings.pendingAttr);
-            }
-          } catch (attrError) {
-            console.warn('[번역 익스텐션] 속성 제거 오류:', attrError);
-          }
-        });
+        resetCount += resetAttributeFromElements(settings.pendingAttr);
         
         // 소스 텍스트 데이터 속성 제거
-        document.querySelectorAll(`[${settings.sourceAttr}]`).forEach(element => {
+        resetCount += resetAttributeFromElements(settings.sourceAttr);
+        
+        console.log(`[${TonyConfig.APP_CONFIG.appName}] ${resetCount}개 번역 속성 초기화 완료`);
+        return resetCount;
+      } catch (error) {
+        handleError('번역 속성 초기화 오류', error);
+        return 0;
+      }
+    }
+    
+    /**
+     * 특정 속성을 가진 요소들의 속성 제거
+     * @param {string} attributeName - 제거할 속성 이름
+     * @returns {number} - 처리된 요소 수
+     */
+    function resetAttributeFromElements(attributeName) {
+      try {
+        const elements = document.querySelectorAll(`[${attributeName}]`);
+        let count = 0;
+        
+        elements.forEach(element => {
           try {
             if (element && element.removeAttribute) {
-              element.removeAttribute(settings.sourceAttr);
+              element.removeAttribute(attributeName);
+              count++;
             }
           } catch (attrError) {
-            console.warn('[번역 익스텐션] 속성 제거 오류:', attrError);
+            console.warn(`[${TonyConfig.APP_CONFIG.appName}] 속성 제거 오류:`, attrError);
           }
         });
         
-        console.log('[번역 익스텐션] 모든 번역 속성 초기화 완료');
+        return count;
       } catch (error) {
-        console.error('[번역 익스텐션] 번역 속성 초기화 오류:', error);
+        console.warn(`[${TonyConfig.APP_CONFIG.appName}] 속성 리셋 오류:`, error);
+        return 0;
       }
     }
-
-        // dom-selector.js 파일 수정
-    function isValidSelector(selector) {
-        try {
-            // 빈 선택자나 null 체크
-            if (!selector || typeof selector !== 'string' || selector.trim() === '') {
-                return false;
-            }
-            
-            // 선택자에 특수문자가 포함된 경우 추가 검증
-            if (selector.includes('(') || selector.includes(')') || 
-                selector.includes('[') || selector.includes(']')) {
-                // 복잡한 선택자 검증은 더 안전한 방법으로
-                try {
-                document.querySelector(selector);
-                return true;
-                } catch (e) {
-                console.warn(`[번역 익스텐션] 복잡한 선택자 검증 실패: ${selector}`, e);
-                return false;
-                }
-            }
-            
-            // 기본 검증
-            document.createDocumentFragment().querySelector(selector);
-            return true;
-        } catch (error) {
-            console.warn(`[번역 익스텐션] 유효하지 않은 선택자: ${selector}`, error);
-            return false;
-        }
-    }
-
-    // matches 함수 호출을 안전하게 보호
-    function safeMatches(element, selector) {
-        if (!element || !element.matches || !isValidSelector(selector)) {
-            return false;
-        }
-        
-        try {
-            return element.matches(selector);
-        } catch (error) {
-            console.warn("[번역 익스텐션] matches 함수 오류:", error);
-            return false;
-        }
-    }
-  
-        // hasParentMatching 함수 수정
-    function hasParentMatching(node, selector) {
-        // 선택자가 유효하지 않으면 즉시 반환
-        if (!node || !selector || !isValidSelector(selector)) {
-            return false;
-        }
-        
-        try {
-            let parent = node.parentNode;
-        
-        while (parent && parent !== document.body) {
-            if (parent.nodeType === Node.ELEMENT_NODE) {
-                if (safeMatches(parent, selector)) {
-                    return true;
-                }
-            }
-            parent = parent.parentNode;
-        }
-        
-            return false;
-        } catch (error) {
-            console.error("[번역 익스텐션] 부모 노드 확인 오류:", error);
-            return false;
-        }
+    
+    /**
+     * 오류 처리
+     * @param {string} message - 오류 메시지
+     * @param {Error} error - 오류 객체
+     */
+    function handleError(message, error) {
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] ${message}:`, error);
+      
+      // 오류 이벤트 발행
+      try {
+        TonyConfig.safeDispatchEvent('domselector:error', {
+          message,
+          error: error.message
+        });
+      } catch (eventError) {
+        console.warn(`[${TonyConfig.APP_CONFIG.appName}] 이벤트 발행 오류:`, eventError);
+      }
     }
     
     // 공개 API
@@ -522,7 +639,9 @@ const DOMSelector = (function() {
       extractAllTextNodes,
       updateSettings,
       getSettings,
-      resetAllTranslationAttributes
+      resetAllTranslationAttributes,
+      isValidSelector,
+      safeMatches
     };
   })();
   

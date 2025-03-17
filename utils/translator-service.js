@@ -1,27 +1,27 @@
-// translator-service.js - 개선된 리팩토링 버전
+// translator-service.js - TonyConfig 활용 리팩토링 버전
 const TranslatorService = (function() {
   'use strict';
   
   // 이미 초기화된 경우 중복 실행 방지
   if (window.translatorServiceInitialized) {
-    console.log("[번역 익스텐션] TranslatorService 이미 초기화됨");
+    console.log(`[${TonyConfig.APP_CONFIG.appName}] TranslatorService 이미 초기화됨`);
     return window.TranslatorService;
   }
   
   // 초기화 플래그 설정
   window.translatorServiceInitialized = true;
   
-  // 기본 설정
+  // 설정 (TonyConfig에서 가져옴)
   const DEFAULT_SETTINGS = {
-    workerEndpoint: 'https://translate-worker.redofyear2.workers.dev',
-    targetLang: 'ko',  // 대상 언어 (한국어)
-    separator: "||TRANSLATE_SEPARATOR||",
-    maxRetryCount: 2,  // 오류 발생 시 최대 재시도 횟수
-    retryDelay: 1000,  // 재시도 사이의 지연 시간(ms)
-    timeout: 20000,    // 요청 타임아웃(ms)
-    forceTranslation: false, // 캐시된 결과가 있어도 강제로 번역
-    useFallbackApi: true,   // 기본 API 실패 시 대체 API 사용
-    batchSize: 40      // 배치 크기
+    workerEndpoint: TonyConfig.APP_CONFIG.apiEndpoint,
+    targetLang: 'ko',
+    separator: TonyConfig.APP_CONFIG.translateSeparator,
+    maxRetryCount: TonyConfig.APP_CONFIG.apiSettings.maxRetryCount,
+    retryDelay: TonyConfig.APP_CONFIG.apiSettings.retryDelay,
+    timeout: TonyConfig.APP_CONFIG.apiSettings.timeout,
+    forceTranslation: false,
+    useFallbackApi: true,
+    batchSize: 40
   };
   
   // 현재 설정
@@ -34,8 +34,8 @@ const TranslatorService = (function() {
     totalProcessed: 0,
     errorCount: 0,
     lastError: null,
-    supportedLanguages: [],  // languages.json에서 동적으로 로드할 예정
-    languagesLoaded: false   // 언어 목록 로드 상태
+    supportedLanguages: [],
+    languagesLoaded: false
   };
   
   /**
@@ -43,6 +43,7 @@ const TranslatorService = (function() {
    * @returns {Promise<Array>} - 지원 언어 코드 배열
    */
   async function loadSupportedLanguages() {
+    // 이미 로드된 경우 캐시된 목록 반환
     if (state.languagesLoaded && state.supportedLanguages.length > 0) {
       return state.supportedLanguages;
     }
@@ -58,7 +59,7 @@ const TranslatorService = (function() {
         return state.supportedLanguages;
       }
     } catch (error) {
-      console.error('[번역 익스텐션] 언어 목록 로드 오류:', error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 언어 목록 로드 오류:`, error);
       // 오류 시 기본 언어 목록 사용
       state.supportedLanguages = ['ko', 'en', 'ja', 'zh', 'es', 'fr', 'de'];
     }
@@ -90,22 +91,13 @@ const TranslatorService = (function() {
       
       // 캐시 확인 (강제 번역이 아닌 경우)
       if (!translationOptions.forceTranslation) {
-        const cacheKey = `${translationOptions.targetLang}:${text}`;
+        // 내부 캐시 확인
+        const cacheResult = checkInternalCache(text, translationOptions.targetLang);
+        if (cacheResult) return cacheResult;
         
-        if (state.cachedTranslations.has(cacheKey)) {
-          return state.cachedTranslations.get(cacheKey);
-        }
-        
-        // CacheManager 모듈이 있는 경우 사용
-        if (window.CacheManager) {
-          const cachedTranslation = await window.CacheManager.get(text, translationOptions.targetLang);
-          
-          if (cachedTranslation) {
-            // 내부 캐시에도 저장
-            state.cachedTranslations.set(cacheKey, cachedTranslation);
-            return cachedTranslation;
-          }
-        }
+        // 외부 캐시 확인 (CacheManager 사용)
+        const externalCacheResult = await checkExternalCache(text, translationOptions.targetLang);
+        if (externalCacheResult) return externalCacheResult;
       }
       
       // 단일 텍스트를 배열로 변환하여 처리
@@ -114,12 +106,46 @@ const TranslatorService = (function() {
       // 번역 결과 반환
       return translations[0] || text;
     } catch (error) {
-      console.error("[번역 익스텐션] 텍스트 번역 오류:", error);
-      state.lastError = error;
-      state.errorCount++;
-      
+      handleTranslationError(error, "텍스트 번역");
       return text; // 오류 시 원본 반환
     }
+  }
+  
+  /**
+   * 내부 캐시 확인
+   * @param {string} text - 원본 텍스트
+   * @param {string} targetLang - 대상 언어
+   * @returns {string|null} - 캐시된 번역 또는 null
+   */
+  function checkInternalCache(text, targetLang) {
+    const cacheKey = `${targetLang}:${text}`;
+    return state.cachedTranslations.has(cacheKey) ? 
+      state.cachedTranslations.get(cacheKey) : null;
+  }
+  
+  /**
+   * 외부 캐시(CacheManager) 확인
+   * @param {string} text - 원본 텍스트
+   * @param {string} targetLang - 대상 언어
+   * @returns {Promise<string|null>} - 캐시된 번역 또는 null
+   */
+  async function checkExternalCache(text, targetLang) {
+    // CacheManager 모듈이 있는 경우 사용
+    if (window.CacheManager) {
+      try {
+        const cachedTranslation = await window.CacheManager.get(text, targetLang);
+        
+        if (cachedTranslation) {
+          // 내부 캐시에도 저장
+          const cacheKey = `${targetLang}:${text}`;
+          state.cachedTranslations.set(cacheKey, cachedTranslation);
+          return cachedTranslation;
+        }
+      } catch (error) {
+        console.warn(`[${TonyConfig.APP_CONFIG.appName}] 캐시 확인 오류:`, error);
+      }
+    }
+    return null;
   }
   
   /**
@@ -142,167 +168,200 @@ const TranslatorService = (function() {
         useFallbackApi: options.useFallbackApi !== undefined ? options.useFallbackApi : settings.useFallbackApi
       };
       
-      // 번역 요청 데이터 준비
+      // 텍스트 항목 준비
       const textItems = texts.map(text => String(text || '').trim());
-      
-      // 빈 텍스트 필터링
       const nonEmptyTexts = textItems.filter(text => text);
       
       if (nonEmptyTexts.length === 0) {
         return texts; // 모두 빈 텍스트인 경우 원본 반환
       }
       
-      // 캐시 처리 함수
-      const processCacheResults = async () => {
-        const cachedResults = new Array(textItems.length);
-        let allCached = true;
-        
-        for (let i = 0; i < textItems.length; i++) {
-          const text = textItems[i];
-          
-          if (!text) {
-            cachedResults[i] = text;
-            continue;
-          }
-          
-          const cacheKey = `${translationOptions.targetLang}:${text}`;
-          
-          if (state.cachedTranslations.has(cacheKey)) {
-            cachedResults[i] = state.cachedTranslations.get(cacheKey);
-          } else if (window.CacheManager) {
-            try {
-              const cachedTranslation = await window.CacheManager.get(text, translationOptions.targetLang);
-              
-              if (cachedTranslation) {
-                cachedResults[i] = cachedTranslation;
-                // 내부 캐시에도 저장
-                state.cachedTranslations.set(cacheKey, cachedTranslation);
-              } else {
-                cachedResults[i] = null;
-                allCached = false;
-              }
-            } catch (error) {
-              cachedResults[i] = null;
-              allCached = false;
-            }
-          } else {
-            cachedResults[i] = null;
-            allCached = false;
-          }
-        }
-        
-        return { cachedResults, allCached };
-      };
-      
-      // 캐시 저장 함수
-      const saveToCaches = (originalText, translatedText, targetLang) => {
-        if (!originalText || !translatedText) return;
-        
-        const cacheKey = `${targetLang}:${originalText}`;
-        state.cachedTranslations.set(cacheKey, translatedText);
-          
-        if (window.CacheManager) {
-          window.CacheManager.set(originalText, translatedText, targetLang);
-        }
-      };
-      
-      // 강제 번역이 아닌 경우 캐시 확인
-      if (!translationOptions.forceTranslation) {
-        const { cachedResults, allCached } = await processCacheResults();
-        
-        // 모두 캐시된 경우 바로 반환
-        if (allCached) {
-          return cachedResults;
-        }
-        
-        // 캐시되지 않은 항목만 번역
-        const textsToTranslate = [];
-        const textsToTranslateIndices = [];
-        
-        for (let i = 0; i < textItems.length; i++) {
-          if (cachedResults[i] === null && textItems[i]) {
-            textsToTranslate.push(textItems[i]);
-            textsToTranslateIndices.push(i);
-          }
-        }
-        
-        // 번역이 필요한 텍스트가 없는 경우 캐시 결과 반환
-        if (textsToTranslate.length === 0) {
-          return cachedResults;
-        }
-        
-        // 번역 요청
-        try {
-          const translatedTexts = await requestTranslation(textsToTranslate, translationOptions);
-          
-          // 번역 결과를 원래 위치에 삽입
-          for (let i = 0; i < translatedTexts.length; i++) {
-            const originalIndex = textsToTranslateIndices[i];
-            cachedResults[originalIndex] = translatedTexts[i];
-            
-            // 캐시 저장
-            saveToCaches(textItems[originalIndex], translatedTexts[i], translationOptions.targetLang);
-          }
-          
-          // 빈 결과는 원본으로 대체
-          for (let i = 0; i < cachedResults.length; i++) {
-            if (cachedResults[i] === null) {
-              cachedResults[i] = textItems[i];
-            }
-          }
-          
-          return cachedResults;
-        } catch (error) {
-          console.error("[번역 익스텐션] 번역 요청 오류:", error);
-          
-          // 번역 실패 시 캐시된 결과 + 원본 텍스트 반환
-          for (let i = 0; i < cachedResults.length; i++) {
-            if (cachedResults[i] === null) {
-              cachedResults[i] = textItems[i];
-            }
-          }
-          
-          state.lastError = error;
-          state.errorCount++;
-          
-          return cachedResults;
-        }
-      } else {
+      // 강제 번역 여부에 따른 처리
+      if (translationOptions.forceTranslation) {
         // 강제 번역 - 캐시 무시하고 모두 번역
-        const translatedTexts = await requestTranslation(nonEmptyTexts, translationOptions);
-        
-        // 빈 텍스트와 번역 결과 결합
-        const results = new Array(textItems.length);
-        let translatedIndex = 0;
-        
-        for (let i = 0; i < textItems.length; i++) {
-          if (textItems[i]) {
-            results[i] = translatedTexts[translatedIndex] || textItems[i];
-            translatedIndex++;
-            
-            // 캐시 업데이트 (오류가 없는 경우)
-            if (results[i] !== textItems[i]) {
-              saveToCaches(textItems[i], results[i], translationOptions.targetLang);
-            }
-          } else {
-            results[i] = textItems[i]; // 빈 텍스트는 그대로 유지
-          }
-        }
-        
-        return results;
+        return await handleForceTranslation(textItems, nonEmptyTexts, translationOptions);
+      } else {
+        // 일반 번역 - 캐시 확인 후 필요한 것만 번역
+        return await handleNormalTranslation(textItems, translationOptions);
       }
     } catch (error) {
-      console.error("[번역 익스텐션] 텍스트 배열 번역 오류:", error);
-      state.lastError = error;
-      state.errorCount++;
-      
+      handleTranslationError(error, "텍스트 배열 번역");
       return texts; // 오류 시 원본 반환
     }
   }
   
   /**
+   * 강제 번역 처리 (캐시 무시)
+   * @param {string[]} textItems - 전체 텍스트 항목
+   * @param {string[]} nonEmptyTexts - 비어있지 않은 텍스트 항목
+   * @param {Object} options - 번역 옵션
+   * @returns {Promise<string[]>} - 번역된 텍스트 배열
+   */
+  async function handleForceTranslation(textItems, nonEmptyTexts, options) {
+    const translatedTexts = await requestTranslation(nonEmptyTexts, options);
+    
+    // 빈 텍스트와 번역 결과 결합
+    const results = new Array(textItems.length);
+    let translatedIndex = 0;
+    
+    for (let i = 0; i < textItems.length; i++) {
+      if (textItems[i]) {
+        results[i] = translatedTexts[translatedIndex] || textItems[i];
+        translatedIndex++;
+        
+        // 캐시 업데이트 (오류가 없는 경우)
+        if (results[i] !== textItems[i]) {
+          saveToCaches(textItems[i], results[i], options.targetLang);
+        }
+      } else {
+        results[i] = textItems[i]; // 빈 텍스트는 그대로 유지
+      }
+    }
+    
+    return results;
+  }
+  
+  /**
+   * 일반 번역 처리 (캐시 확인)
+   * @param {string[]} textItems - 전체 텍스트 항목
+   * @param {Object} options - 번역 옵션
+   * @returns {Promise<string[]>} - 번역된 텍스트 배열
+   */
+  async function handleNormalTranslation(textItems, options) {
+    // 캐시 결과 처리
+    const { cachedResults, allCached } = await processCacheResults(textItems, options.targetLang);
+    
+    // 모두 캐시된 경우 바로 반환
+    if (allCached) {
+      return cachedResults;
+    }
+    
+    // 캐시되지 않은 항목만 번역
+    const textsToTranslate = [];
+    const textsToTranslateIndices = [];
+    
+    for (let i = 0; i < textItems.length; i++) {
+      if (cachedResults[i] === null && textItems[i]) {
+        textsToTranslate.push(textItems[i]);
+        textsToTranslateIndices.push(i);
+      }
+    }
+    
+    // 번역이 필요한 텍스트가 없는 경우 캐시 결과 반환
+    if (textsToTranslate.length === 0) {
+      return cachedResults;
+    }
+    
+    try {
+      // 번역 요청
+      const translatedTexts = await requestTranslation(textsToTranslate, options);
+      
+      // 번역 결과를 원래 위치에 삽입
+      for (let i = 0; i < translatedTexts.length; i++) {
+        const originalIndex = textsToTranslateIndices[i];
+        cachedResults[originalIndex] = translatedTexts[i];
+        
+        // 캐시 저장
+        saveToCaches(textItems[originalIndex], translatedTexts[i], options.targetLang);
+      }
+      
+      // 빈 결과는 원본으로 대체
+      for (let i = 0; i < cachedResults.length; i++) {
+        if (cachedResults[i] === null) {
+          cachedResults[i] = textItems[i];
+        }
+      }
+      
+      return cachedResults;
+    } catch (error) {
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 번역 요청 오류:`, error);
+      
+      // 번역 실패 시 캐시된 결과 + 원본 텍스트 반환
+      for (let i = 0; i < cachedResults.length; i++) {
+        if (cachedResults[i] === null) {
+          cachedResults[i] = textItems[i];
+        }
+      }
+      
+      state.lastError = error;
+      state.errorCount++;
+      
+      return cachedResults;
+    }
+  }
+  
+  /**
+   * 캐시 결과 처리
+   * @param {string[]} textItems - 텍스트 항목
+   * @param {string} targetLang - 대상 언어
+   * @returns {Promise<Object>} - 처리된 캐시 결과
+   */
+  async function processCacheResults(textItems, targetLang) {
+    const cachedResults = new Array(textItems.length);
+    let allCached = true;
+    
+    for (let i = 0; i < textItems.length; i++) {
+      const text = textItems[i];
+      
+      if (!text) {
+        cachedResults[i] = text;
+        continue;
+      }
+      
+      // 내부 캐시 확인
+      const cacheResult = checkInternalCache(text, targetLang);
+      if (cacheResult) {
+        cachedResults[i] = cacheResult;
+        continue;
+      }
+      
+      // 외부 캐시 확인
+      if (window.CacheManager) {
+        try {
+          const cachedTranslation = await window.CacheManager.get(text, targetLang);
+          
+          if (cachedTranslation) {
+            cachedResults[i] = cachedTranslation;
+            // 내부 캐시에도 저장
+            saveToCaches(text, cachedTranslation, targetLang);
+          } else {
+            cachedResults[i] = null;
+            allCached = false;
+          }
+        } catch (error) {
+          cachedResults[i] = null;
+          allCached = false;
+        }
+      } else {
+        cachedResults[i] = null;
+        allCached = false;
+      }
+    }
+    
+    return { cachedResults, allCached };
+  }
+  
+  /**
+   * 캐시에 번역 결과 저장
+   * @param {string} originalText - 원본 텍스트
+   * @param {string} translatedText - 번역된 텍스트
+   * @param {string} targetLang - 대상 언어
+   */
+  function saveToCaches(originalText, translatedText, targetLang) {
+    if (!originalText || !translatedText) return;
+    
+    // 내부 캐시에 저장
+    const cacheKey = `${targetLang}:${originalText}`;
+    state.cachedTranslations.set(cacheKey, translatedText);
+    
+    // 외부 캐시에 저장 (CacheManager 사용)
+    if (window.CacheManager) {
+      window.CacheManager.set(originalText, translatedText, targetLang);
+    }
+  }
+  
+  /**
    * 번역 API 요청
-   * @private
    * @param {string[]} texts - 번역할 텍스트 배열
    * @param {Object} options - 번역 옵션
    * @returns {Promise<string[]>} - 번역된 텍스트 배열
@@ -327,9 +386,7 @@ const TranslatorService = (function() {
         // 번역 API 호출 (타임아웃 적용)
         const fetchPromise = fetch(settings.workerEndpoint, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(requestData)
         });
         
@@ -342,54 +399,7 @@ const TranslatorService = (function() {
         const response = await Promise.race([fetchPromise, timeoutPromise]);
         
         if (!response.ok) {
-          let errorMessage = "번역 API 오류";
-          
-          try {
-            const errorData = await response.json();
-            errorMessage = errorData.error || response.statusText;
-          } catch (e) {
-            errorMessage = response.statusText;
-          }
-          
-          // API 응답 상태 코드에 따른 처리
-          switch (true) {
-            // 서버 오류 또는 레이트 리밋 초과 (재시도 가능)
-            case (response.status >= 500 || response.status === 429):
-              if (options.retryCount < settings.maxRetryCount) {
-                console.warn(`[번역 익스텐션] API 오류, ${options.retryCount + 1}번째 재시도 중: ${errorMessage}`);
-                
-                // 지수 백오프 (재시도 횟수에 따라 대기 시간 증가)
-                const delay = settings.retryDelay * Math.pow(2, options.retryCount);
-                await new Promise(resolve => setTimeout(resolve, delay));
-                
-                // 재시도
-                state.activeRequests--;
-                return translateTexts(texts, {
-                  ...options,
-                  retryCount: options.retryCount + 1
-                });
-              }
-              break;
-              
-            // 클라이언트 오류 (400번대) - 재시도해도 같은 결과 예상
-            default:
-              break;
-          }
-          
-          // 대체 API 사용 가능한 경우 (메인 API 실패 시)
-          if (options.useFallbackApi && !options.usingFallbackApi) {
-            console.warn(`[번역 익스텐션] 메인 API 실패, 대체 API 사용: ${errorMessage}`);
-            
-            // 대체 API 호출 설정
-            state.activeRequests--;
-            return translateTexts(texts, {
-              ...options,
-              usingFallbackApi: true,
-              retryCount: 0
-            });
-          }
-          
-          throw new Error(`번역 API 오류: ${errorMessage}`);
+          return handleApiError(response, texts, options);
         }
         
         // 응답 데이터 파싱
@@ -410,38 +420,116 @@ const TranslatorService = (function() {
         state.activeRequests--;
       }
     } catch (error) {
-      console.error(`[번역 익스텐션] 번역 API 요청 오류: ${error.message}`);
-      
-      // 재시도 가능하고 최대 재시도 횟수 미만인 경우
-      if (options.retryCount < settings.maxRetryCount) {
-        console.warn(`[번역 익스텐션] ${options.retryCount + 1}번째 재시도 중`);
+      return handleRequestError(error, texts, options);
+    }
+  }
+  
+  /**
+   * API 오류 처리
+   * @param {Response} response - HTTP 응답
+   * @param {string[]} texts - 번역할 텍스트 배열
+   * @param {Object} options - 번역 옵션
+   * @returns {Promise<string[]>} - 번역된 텍스트 배열 또는 원본
+   */
+  async function handleApiError(response, texts, options) {
+    let errorMessage = "번역 API 오류";
+    
+    try {
+      const errorData = await response.json();
+      errorMessage = errorData.error || response.statusText;
+    } catch (e) {
+      errorMessage = response.statusText;
+    }
+    
+    // 응답 상태 코드에 따른 처리
+    switch (true) {
+      // 서버 오류 또는 레이트 리밋 초과 (재시도 가능)
+      case (response.status >= 500 || response.status === 429):
+        if (options.retryCount < settings.maxRetryCount) {
+          console.warn(`[${TonyConfig.APP_CONFIG.appName}] API 오류, ${options.retryCount + 1}번째 재시도 중: ${errorMessage}`);
+          
+          // 지수 백오프 (재시도 횟수에 따라 대기 시간 증가)
+          const delay = settings.retryDelay * Math.pow(2, options.retryCount);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          
+          // 재시도
+          state.activeRequests--;
+          return translateTexts(texts, {
+            ...options,
+            retryCount: options.retryCount + 1
+          });
+        }
+        break;
         
-        // 지수 백오프 (재시도 횟수에 따라 대기 시간 증가)
-        const delay = settings.retryDelay * Math.pow(2, options.retryCount);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        
-        // 재시도
-        return translateTexts(texts, {
-          ...options,
-          retryCount: options.retryCount + 1
-        });
-      }
-      
-      // 대체 API 사용 가능한 경우 (최대 재시도 실패 후)
-      if (options.useFallbackApi && !options.usingFallbackApi) {
-        console.warn(`[번역 익스텐션] 메인 API 재시도 실패, 대체 API 사용`);
+      // 대체 API 사용 (메인 API 실패 시)
+      case (options.useFallbackApi && !options.usingFallbackApi):
+        console.warn(`[${TonyConfig.APP_CONFIG.appName}] 메인 API 실패, 대체 API 사용: ${errorMessage}`);
         
         // 대체 API 호출 설정
+        state.activeRequests--;
         return translateTexts(texts, {
           ...options,
           usingFallbackApi: true,
           retryCount: 0
         });
-      }
-      
-      // 모든 시도 실패, 원본 텍스트 반환
-      return texts;
     }
+    
+    throw new Error(`번역 API 오류: ${errorMessage}`);
+  }
+  
+  /**
+   * 요청 오류 처리
+   * @param {Error} error - 발생한 오류
+   * @param {string[]} texts - 번역할 텍스트 배열
+   * @param {Object} options - 번역 옵션
+   * @returns {Promise<string[]>} - 번역된 텍스트 배열 또는 원본
+   */
+  async function handleRequestError(error, texts, options) {
+    console.error(`[${TonyConfig.APP_CONFIG.appName}] 번역 API 요청 오류: ${error.message}`);
+    
+    // 재시도 여부 확인
+    if (options.retryCount < settings.maxRetryCount) {
+      console.warn(`[${TonyConfig.APP_CONFIG.appName}] ${options.retryCount + 1}번째 재시도 중`);
+      
+      // 지수 백오프 (재시도 횟수에 따라 대기 시간 증가)
+      const delay = settings.retryDelay * Math.pow(2, options.retryCount);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      
+      // 재시도
+      return translateTexts(texts, {
+        ...options,
+        retryCount: options.retryCount + 1
+      });
+    }
+    
+    // 대체 API 사용 여부 확인
+    if (options.useFallbackApi && !options.usingFallbackApi) {
+      console.warn(`[${TonyConfig.APP_CONFIG.appName}] 메인 API 재시도 실패, 대체 API 사용`);
+      
+      // 대체 API 호출
+      return translateTexts(texts, {
+        ...options,
+        usingFallbackApi: true,
+        retryCount: 0
+      });
+    }
+    
+    // 모든 시도 실패, 원본 텍스트 반환
+    return texts;
+  }
+  
+  /**
+   * 번역 오류 처리
+   * @param {Error} error - 발생한 오류
+   * @param {string} context - 오류 발생 컨텍스트
+   */
+  function handleTranslationError(error, context) {
+    console.error(`[${TonyConfig.APP_CONFIG.appName}] ${context} 오류:`, error);
+    state.lastError = error;
+    state.errorCount++;
+    
+    // 오류 이벤트 발행
+    safeDispatchEvent('translation:error', { error: error.message, context });
   }
   
   /**
@@ -526,29 +614,7 @@ const TranslatorService = (function() {
           
           return translations;
         } catch (error) {
-          console.error("[번역 익스텐션] 배치 처리 오류:", error);
-          
-          // 오류 발생 시 원본 텍스트 반환
-          for (let i = 0; i < batch.texts.length; i++) {
-            const resultIndex = batch.startIndex + i;
-            if (resultIndex < results.length) {
-              results[resultIndex] = {
-                original: batch.texts[i],
-                translated: batch.texts[i]
-              };
-            }
-          }
-          
-          // 진행 상태 업데이트
-          completed++;
-          
-          // 배치 오류 이벤트 발행
-          safeDispatchEvent('translation:batch-error', {
-            completed,
-            total,
-            error: error.message
-          });
-          
+          handleBatchError(batch, error, results);
           return batch.texts;
         }
       };
@@ -568,8 +634,7 @@ const TranslatorService = (function() {
       
       return results;
     } catch (error) {
-      console.error("[번역 익스텐션] 배치 번역 오류:", error);
-      
+      handleTranslationError(error, "배치 번역");
       // 오류 시 원본 텍스트 반환
       return texts.map(text => ({
         original: text,
@@ -579,16 +644,42 @@ const TranslatorService = (function() {
   }
   
   /**
+   * 배치 처리 오류 핸들러
+   * @param {Object} batch - 배치 객체
+   * @param {Error} error - 발생한 오류
+   * @param {Array} results - 결과 배열
+   */
+  function handleBatchError(batch, error, results) {
+    console.error(`[${TonyConfig.APP_CONFIG.appName}] 배치 처리 오류:`, error);
+    
+    // 오류 발생 시 원본 텍스트 반환
+    for (let i = 0; i < batch.texts.length; i++) {
+      const resultIndex = batch.startIndex + i;
+      if (resultIndex < results.length) {
+        results[resultIndex] = {
+          original: batch.texts[i],
+          translated: batch.texts[i]
+        };
+      }
+    }
+    
+    // 배치 오류 이벤트 발행
+    safeDispatchEvent('translation:batch-error', {
+      error: error.message,
+      batchSize: batch.texts.length
+    });
+  }
+  
+  /**
    * 안전한 이벤트 발행
-   * @private
    * @param {string} eventName - 이벤트 이름
    * @param {Object} detail - 이벤트 상세 정보
    */
   function safeDispatchEvent(eventName, detail = {}) {
     try {
-      window.dispatchEvent(new CustomEvent(eventName, { detail }));
+      TonyConfig.safeDispatchEvent(eventName, detail);
     } catch (error) {
-      console.error(`[번역 익스텐션] 이벤트 발행 오류 (${eventName}):`, error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 이벤트 발행 오류 (${eventName}):`, error);
     }
   }
   
@@ -605,9 +696,9 @@ const TranslatorService = (function() {
         window.CacheManager.cleanupExpired();
       }
       
-      console.log("[번역 익스텐션] 번역 캐시 초기화 완료");
+      console.log(`[${TonyConfig.APP_CONFIG.appName}] 번역 캐시 초기화 완료`);
     } catch (error) {
-      console.error("[번역 익스텐션] 캐시 초기화 오류:", error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 캐시 초기화 오류:`, error);
     }
   }
   
@@ -663,7 +754,7 @@ const TranslatorService = (function() {
       // 번역 결과가 원본과 다르고 비어있지 않으면 성공
       return !!testResult && testResult !== testText;
     } catch (error) {
-      console.error("[번역 익스텐션] 연결 테스트 오류:", error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 연결 테스트 오류:`, error);
       return false;
     }
   }
