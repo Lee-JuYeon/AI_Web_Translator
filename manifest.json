@@ -22,6 +22,7 @@
     {
       "matches": ["<all_urls>"],
       "js": [
+        "config.js",
         "utils/cache-manager.js", 
         "utils/usage-manager.js",
         "utils/ui-manager.js",

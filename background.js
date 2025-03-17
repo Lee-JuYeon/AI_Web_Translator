@@ -2,6 +2,45 @@
 (function() {
   'use strict';
   
+  // 확장 프로그램 기본 설정
+  const APP_CONFIG = {
+    menuItemId: 'tony_translate',
+    appName: 'Tony번역',
+    contentScripts: [
+      'config.js', // config.js를 맨 처음에 로드하도록 명시적으로 지정
+      'utils/cache-manager.js', 
+      'utils/usage-manager.js',
+      'utils/ui-manager.js',
+      'utils/dom/dom-selector.js',   
+      'utils/dom/dom-observer.js',     
+      'utils/dom/dom-manipulator.js',
+      'utils/batch/batch_engine.js',     
+      'utils/translator-service.js',
+      'utils/dom/dom-handler.js',        
+      'content-script.js'
+    ],
+    defaultSettings: {
+      targetLang: getBrowserLanguage(),
+      autoTranslate: false
+    },
+    cacheSettings: {
+      keyPrefix: 'translate_'
+    }
+  };
+  
+  // 기본 언어 설정 함수
+  function getBrowserLanguage() {
+    const browserLang = navigator.language.split('-')[0];
+    const supportedLanguages = ['ko', 'en', 'ja', 'zh', 'es', 'fr', 'de'];
+    return supportedLanguages.includes(browserLang) ? browserLang : 'ko';
+  }
+  
+  // 현재 월 구하기 함수
+  function getCurrentMonth() {
+    const date = new Date();
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  }
+  
   // 확장 프로그램 설치 및 업데이트 이벤트
   chrome.runtime.onInstalled.addListener(handleExtensionInstalled);
   
@@ -46,8 +85,8 @@
   function initializeSettings() {
     // 기본 설정 생성
     const defaultSettings = {
-      ...TonyConfig.APP_CONFIG.defaultSettings,
-      targetLang: TonyConfig.getBrowserLanguage()
+      ...APP_CONFIG.defaultSettings,
+      targetLang: getBrowserLanguage()
     };
     
     chrome.storage.sync.set({ settings: defaultSettings });
@@ -60,7 +99,7 @@
    * 사용량 통계 초기화
    */
   function initUsageStats() {
-    const currentMonth = TonyConfig.getCurrentMonth();
+    const currentMonth = getCurrentMonth();
     
     const initialUsage = {
       month: currentMonth,
@@ -76,7 +115,7 @@
    * @param {string} previousVersion - 이전 버전
    */
   function logUpdate(previousVersion) {
-    console.log(`[${TonyConfig.APP_CONFIG.appName}] 업데이트 완료: ${previousVersion} → ${chrome.runtime.getManifest().version}`);
+    console.log(`[${APP_CONFIG.appName}] 업데이트 완료: ${previousVersion} → ${chrome.runtime.getManifest().version}`);
     
     // 업데이트 히스토리 저장 (최근 5개)
     chrome.storage.local.get('updateHistory', (data) => {
@@ -107,9 +146,9 @@
       let needsUpdate = false;
       
       // 버전별 마이그레이션 로직
-      if (TonyConfig.compareVersions(previousVersion, '1.0.0') < 0) {
+      if (compareVersions(previousVersion, '1.0.0') < 0) {
         // 새로운 기본값으로 업데이트
-        Object.entries(TonyConfig.APP_CONFIG.defaultSettings).forEach(([key, value]) => {
+        Object.entries(APP_CONFIG.defaultSettings).forEach(([key, value]) => {
           if (updatedSettings[key] === undefined) {
             updatedSettings[key] = value;
             needsUpdate = true;
@@ -122,6 +161,27 @@
         chrome.storage.sync.set({ settings: updatedSettings });
       }
     });
+  }
+  
+  /**
+   * 버전 비교 함수
+   * @param {string} v1 - 버전 1
+   * @param {string} v2 - 버전 2
+   * @returns {number} - 비교 결과 (-1: v1 < v2, 0: v1 = v2, 1: v1 > v2)
+   */
+  function compareVersions(v1, v2) {
+    const parts1 = v1.split('.').map(Number);
+    const parts2 = v2.split('.').map(Number);
+    
+    for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+      const num1 = i < parts1.length ? parts1[i] : 0;
+      const num2 = i < parts2.length ? parts2[i] : 0;
+      
+      if (num1 < num2) return -1;
+      if (num1 > num2) return 1;
+    }
+    
+    return 0;
   }
   
   /**
@@ -159,7 +219,7 @@
         return false;
         
       default:
-        console.warn(`[${TonyConfig.APP_CONFIG.appName}] 알 수 없는 메시지: ${message.action}`);
+        console.warn(`[${APP_CONFIG.appName}] 알 수 없는 메시지: ${message.action}`);
         return false;
     }
   }
@@ -174,7 +234,7 @@
     // 콘텐츠 스크립트에 번역 요청 메시지 전송
     chrome.tabs.sendMessage(tab.id, { action: 'translatePage' })
       .catch(error => {
-        console.warn(`[${TonyConfig.APP_CONFIG.appName}] 번역 메시지 전송 오류: ${error.message}`);
+        console.warn(`[${APP_CONFIG.appName}] 번역 메시지 전송 오류: ${error.message}`);
         
         // 콘텐츠 스크립트 로드 후 다시 시도
         loadContentScriptsAndTranslate(tab.id);
@@ -211,12 +271,17 @@
     chrome.storage.sync.get(['usage', 'subscription'], (data) => {
       const subscription = data.subscription || 'FREE';
       const usage = data.usage || {
-        month: TonyConfig.getCurrentMonth(),
+        month: getCurrentMonth(),
         tokensUsed: 0,
         lastReset: new Date().toISOString()
       };
       
-      const limit = TonyConfig.APP_CONFIG.subscriptionLimits[subscription] || TonyConfig.APP_CONFIG.subscriptionLimits.FREE;
+      const subscriptionLimits = {
+        FREE: 15000,   // 무료 회원: 약 15,000 토큰 (약 30페이지)
+        BASIC: 100000  // 기본 회원($5): 약 100,000 토큰 (약 200페이지)
+      };
+      
+      const limit = subscriptionLimits[subscription] || subscriptionLimits.FREE;
       const tokensUsed = usage.tokensUsed || 0;
       const remaining = Math.max(0, limit - tokensUsed);
       const percentage = Math.min(100, Math.round((tokensUsed / limit) * 100));
@@ -240,7 +305,7 @@
    */
   function handleClearCacheMessage(sendResponse) {
     chrome.storage.local.get(null, (items) => {
-      const cachePrefix = TonyConfig.APP_CONFIG.cacheSettings.keyPrefix;
+      const cachePrefix = APP_CONFIG.cacheSettings.keyPrefix;
       const cacheKeys = Object.keys(items).filter(key => 
         key.startsWith(cachePrefix)
       );
@@ -278,7 +343,7 @@
       return;
     }
     
-    console.log(`[${TonyConfig.APP_CONFIG.appName}] 누락된 모듈 로드 요청 수신:`, scripts);
+    console.log(`[${APP_CONFIG.appName}] 누락된 모듈 로드 요청 수신:`, scripts);
     
     const tabId = tab.id;
     const loadPromises = [];
@@ -290,11 +355,11 @@
         files: [script]
       })
       .then(() => {
-        console.log(`[${TonyConfig.APP_CONFIG.appName}] ${script} 수동 로드 성공`);
+        console.log(`[${APP_CONFIG.appName}] ${script} 수동 로드 성공`);
         return { script, success: true };
       })
       .catch(error => {
-        console.error(`[${TonyConfig.APP_CONFIG.appName}] ${script} 수동 로드 실패:`, error);
+        console.error(`[${APP_CONFIG.appName}] ${script} 수동 로드 실패:`, error);
         return { script, success: false, error: error.message };
       });
       
@@ -324,7 +389,7 @@
   function setupContextMenu() {
     // 기존 메뉴 항목이 있으면 먼저 삭제
     try {
-      chrome.contextMenus.remove(TonyConfig.APP_CONFIG.menuItemId, () => {
+      chrome.contextMenus.remove(APP_CONFIG.menuItemId, () => {
         // 삭제 후 새로 생성 (lastError 무시)
         if (chrome.runtime.lastError) {
           // 아이템이 없어서 발생하는 오류는 무시
@@ -332,7 +397,7 @@
         
         // 메뉴 생성
         chrome.contextMenus.create({
-          id: TonyConfig.APP_CONFIG.menuItemId,
+          id: APP_CONFIG.menuItemId,
           title: "자연스럽게 번역하기",
           contexts: ["page"]
         });
@@ -340,7 +405,7 @@
     } catch (e) {
       // 오류가 발생해도 메뉴 생성 시도
       chrome.contextMenus.create({
-        id: TonyConfig.APP_CONFIG.menuItemId,
+        id: APP_CONFIG.menuItemId,
         title: "자연스럽게 번역하기",
         contexts: ["page"]
       }, () => {
@@ -352,8 +417,8 @@
     
     // 컨텍스트 메뉴 클릭 이벤트 처리
     chrome.contextMenus.onClicked.addListener((info, tab) => {
-      if (info.menuItemId === TonyConfig.APP_CONFIG.menuItemId && tab && tab.id) {
-        console.log(`[${TonyConfig.APP_CONFIG.appName}] 우클릭 메뉴가 클릭됨, content-script 실행...`);
+      if (info.menuItemId === APP_CONFIG.menuItemId && tab && tab.id) {
+        console.log(`[${APP_CONFIG.appName}] 우클릭 메뉴가 클릭됨, content-script 실행...`);
         loadContentScriptsAndTranslate(tab.id);
       }
     });
@@ -372,7 +437,7 @@
       }
     });
     
-    console.log(`[${TonyConfig.APP_CONFIG.appName}] 월간 사용량 리셋 체크 알람 설정됨`);
+    console.log(`[${APP_CONFIG.appName}] 월간 사용량 리셋 체크 알람 설정됨`);
   }
   
   /**
@@ -380,7 +445,7 @@
    */
   function checkAndResetMonthlyUsage() {
     chrome.storage.sync.get('usage', (data) => {
-      const currentMonth = TonyConfig.getCurrentMonth();
+      const currentMonth = getCurrentMonth();
       
       // 사용량 데이터가 없거나 월이 변경된 경우
       if (!data.usage || data.usage.month !== currentMonth) {
@@ -391,7 +456,7 @@
         };
         
         chrome.storage.sync.set({ usage: newUsage });
-        console.log(`[${TonyConfig.APP_CONFIG.appName}] 월간 사용량 리셋 완료`);
+        console.log(`[${APP_CONFIG.appName}] 월간 사용량 리셋 완료`);
       }
     });
   }
@@ -401,34 +466,31 @@
    * @param {number} tabId - 탭 ID
    */
   function loadContentScriptsAndTranslate(tabId) {
-    // 최초 실행 시 config.js를 추가로 로드
-    const scriptPaths = ['config.js', ...TonyConfig.APP_CONFIG.contentScripts];
-    
     // 스크립트를 순차적으로 로드
     const loadScriptSequentially = (index = 0) => {
-      if (index >= scriptPaths.length) {
+      if (index >= APP_CONFIG.contentScripts.length) {
         // 모든 스크립트 로드 완료 후 번역 요청
-        console.log(`[${TonyConfig.APP_CONFIG.appName}] 모든 스크립트 로드 완료, 번역 요청 전송`);
+        console.log(`[${APP_CONFIG.appName}] 모든 스크립트 로드 완료, 번역 요청 전송`);
         chrome.tabs.sendMessage(tabId, { action: "translatePage" })
-          .catch(err => console.error(`[${TonyConfig.APP_CONFIG.appName}] 번역 요청 전송 오류:`, err));
+          .catch(err => console.error(`[${APP_CONFIG.appName}] 번역 요청 전송 오류:`, err));
         return;
       }
       
-      console.log(`[${TonyConfig.APP_CONFIG.appName}] ${scriptPaths[index]} 로드 중...`);
+      console.log(`[${APP_CONFIG.appName}] ${APP_CONFIG.contentScripts[index]} 로드 중...`);
       
       chrome.scripting.executeScript({
         target: { tabId: tabId },
-        files: [scriptPaths[index]]
+        files: [APP_CONFIG.contentScripts[index]]
       }).then(() => {
-        console.log(`[${TonyConfig.APP_CONFIG.appName}] ${scriptPaths[index]} 로드 성공`);
+        console.log(`[${APP_CONFIG.appName}] ${APP_CONFIG.contentScripts[index]} 로드 성공`);
         // 다음 스크립트 로드
         loadScriptSequentially(index + 1);
       }).catch((err) => {
-        console.error(`[${TonyConfig.APP_CONFIG.appName}] ${scriptPaths[index]} 로드 실패:`, err);
+        console.error(`[${APP_CONFIG.appName}] ${APP_CONFIG.contentScripts[index]} 로드 실패:`, err);
         
         // 핵심 모듈 로드 실패 시 중단
-        if (index <= 3) {  // config.js, cache-manager.js, usage-manager.js, ui-manager.js는 필수
-          console.error(`[${TonyConfig.APP_CONFIG.appName}] 핵심 모듈 로드 실패로 번역을 중단합니다.`);
+        if (index <= 2) {  // config.js, cache-manager.js, usage-manager.js는 필수
+          console.error(`[${APP_CONFIG.appName}] 핵심 모듈 로드 실패로 번역을 중단합니다.`);
           return;
         }
         
@@ -442,7 +504,7 @@
       .then(response => {
         if (response && response.status === "ready") {
           // 이미 로드된 경우 바로 번역 요청
-          console.log(`[${TonyConfig.APP_CONFIG.appName}] 콘텐츠 스크립트가 이미 로드됨`);
+          console.log(`[${APP_CONFIG.appName}] 콘텐츠 스크립트가 이미 로드됨`);
           chrome.tabs.sendMessage(tabId, { action: "translatePage" });
         } else {
           // 순차적으로 스크립트 로드 시작
@@ -450,7 +512,7 @@
         }
       })
       .catch(error => {
-        console.log(`[${TonyConfig.APP_CONFIG.appName}] 콘텐츠 스크립트 확인 실패, 새로 로드합니다:`, error);
+        console.log(`[${APP_CONFIG.appName}] 콘텐츠 스크립트 확인 실패, 새로 로드합니다:`, error);
         // 순차적으로 스크립트 로드 시작
         loadScriptSequentially();
       });
@@ -467,7 +529,7 @@
           chrome.tabs.sendMessage(tab.id, message).catch(err => {
             // content-script가 로드되지 않은 탭에 대한 오류는 무시
             if (!err.message.includes("Receiving end does not exist")) {
-              console.warn(`[${TonyConfig.APP_CONFIG.appName}] 탭 ${tab.id} 메시지 전송 오류:`, err);
+              console.warn(`[${APP_CONFIG.appName}] 탭 ${tab.id} 메시지 전송 오류:`, err);
             }
           });
         } catch (err) {
