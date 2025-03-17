@@ -1,11 +1,10 @@
-<!-- popup/popup.html - 최적화된 버전 -->
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <title>Tony번역</title>
   <link rel="stylesheet" href="popup.css">
-  <!-- 필수 모듈 추가 (순서 중요) -->
+  <!-- 필수 모듈 로드 (순서 중요) -->
   <script src="../utils/cache-manager.js"></script>
   <script src="../utils/usage-manager.js"></script>
   <script src="../utils/ui-manager.js"></script>
@@ -22,6 +21,15 @@
         <select id="targetLang">
           <!-- 언어 옵션은 JS에서 동적으로 로드됩니다 -->
         </select>
+      </div>
+      
+      <!-- 자동 번역 설정 -->
+      <div class="setting-item">
+        <label class="checkbox-container">
+          <input type="checkbox" id="autoTranslate">
+          <span class="checkmark"></span>
+          페이지 로드 시 자동 번역
+        </label>
       </div>
       
       <!-- 사용량 표시 -->

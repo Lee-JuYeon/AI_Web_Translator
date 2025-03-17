@@ -1,14 +1,18 @@
-// utils/ui-manager.js - IntersectionObserver 기반 번역 시스템 지원 버전
+// ui-manager.js - TonyConfig 활용 리팩토링 버전
 const UIManager = (function() {
   'use strict';
   
-  // UI 설정
-  const UI_SETTINGS = {
-    statusTimeout: 2000,        // 상태 메시지 표시 시간 (ms)
-    limitExceededTimeout: 10000, // 한도 초과 알림 표시 시간 (ms)
-    autoHideDelay: 3000,        // 자동 숨김 시간 (ms)
-    progressUpdateInterval: 1000 // 진행 상태 업데이트 간격 (ms)
-  };
+  // 이미 초기화된 경우 중복 실행 방지
+  if (window.uiManagerInitialized) {
+    console.log(`[${TonyConfig.APP_CONFIG.appName}] UIManager 이미 초기화됨`);
+    return window.UIManager;
+  }
+  
+  // 초기화 플래그 설정
+  window.uiManagerInitialized = true;
+  
+  // UI 설정 (TonyConfig에서 가져옴)
+  const UI_SETTINGS = { ...TonyConfig.APP_CONFIG.uiSettings };
   
   // 내부 상태 관리
   const state = {
@@ -22,6 +26,37 @@ const UIManager = (function() {
       lastUpdate: Date.now()
     }
   };
+  
+  /**
+   * 요소 생성 헬퍼 함수
+   * @param {string} tagName - 태그 이름
+   * @param {Object} props - 요소 속성
+   * @param {Object} styles - 요소 스타일
+   * @returns {HTMLElement} - 생성된 요소
+   */
+  function createElement(tagName, props = {}, styles = {}) {
+    const element = document.createElement(tagName);
+    
+    // 속성 설정
+    Object.entries(props).forEach(([key, value]) => {
+      switch (key) {
+        case 'textContent':
+          element.textContent = value;
+          break;
+        case 'innerHTML':
+          element.innerHTML = value;
+          break;
+        default:
+          element.setAttribute(key, value);
+          break;
+      }
+    });
+    
+    // 스타일 설정
+    Object.assign(element.style, styles);
+    
+    return element;
+  }
   
   /**
    * 번역 진행 상태 표시 UI 생성 및 표시
@@ -40,11 +75,11 @@ const UIManager = (function() {
     let statusElement = document.getElementById('translation-status-bar');
     
     if (!statusElement) {
-      statusElement = document.createElement('div');
-      statusElement.id = 'translation-status-bar';
-      
-      // 스타일 설정
-      Object.assign(statusElement.style, {
+      // 새 상태 요소 생성
+      statusElement = createElement('div', {
+        id: 'translation-status-bar',
+        textContent: message
+      }, {
         position: 'fixed',
         bottom: '20px',
         right: '20px',
@@ -63,15 +98,10 @@ const UIManager = (function() {
       document.body.appendChild(statusElement);
       state.activeStatusElement = statusElement;
     } else {
-      // 완료 상태일 경우 색상 변경
-      if (isComplete) {
-        statusElement.style.background = '#4CAF50';
-      } else {
-        statusElement.style.background = '#2196F3';
-      }
+      // 기존 요소 업데이트
+      statusElement.textContent = message;
+      statusElement.style.background = isComplete ? '#4CAF50' : '#2196F3';
     }
-    
-    statusElement.textContent = message;
     
     // 자동 숨김 설정
     if (autoHide) {
@@ -125,22 +155,26 @@ const UIManager = (function() {
     
     // 진행 상태 메시지 생성
     let message = "";
-    if (state.translationStats.totalElements > 0) {
-      const elementsPercent = Math.min(
-        100, 
-        Math.round((state.translationStats.translatedElements / state.translationStats.totalElements) * 100)
-      );
-      
-      message = `번역 진행 중: ${state.translationStats.translatedElements}/${state.translationStats.totalElements} 요소 (${elementsPercent}%)`;
-    } else if (state.translationStats.totalTexts > 0) {
-      const textsPercent = Math.min(
-        100, 
-        Math.round((state.translationStats.translatedTexts / state.translationStats.totalTexts) * 100)
-      );
-      
-      message = `번역 진행 중: ${state.translationStats.translatedTexts}/${state.translationStats.totalTexts} 텍스트 (${textsPercent}%)`;
-    } else {
-      message = "번역 진행 중...";
+    switch (true) {
+      case (state.translationStats.totalElements > 0):
+        const elementsPercent = Math.min(
+          100, 
+          Math.round((state.translationStats.translatedElements / state.translationStats.totalElements) * 100)
+        );
+        message = `번역 진행 중: ${state.translationStats.translatedElements}/${state.translationStats.totalElements} 요소 (${elementsPercent}%)`;
+        break;
+        
+      case (state.translationStats.totalTexts > 0):
+        const textsPercent = Math.min(
+          100, 
+          Math.round((state.translationStats.translatedTexts / state.translationStats.totalTexts) * 100)
+        );
+        message = `번역 진행 중: ${state.translationStats.translatedTexts}/${state.translationStats.totalTexts} 텍스트 (${textsPercent}%)`;
+        break;
+        
+      default:
+        message = "번역 진행 중...";
+        break;
     }
     
     // 진행 상태 UI 업데이트
@@ -155,10 +189,16 @@ const UIManager = (function() {
     let limitElement = document.getElementById('translation-limit-exceeded');
     
     if (!limitElement) {
-      limitElement = document.createElement('div');
-      limitElement.id = 'translation-limit-exceeded';
-      
-      Object.assign(limitElement.style, {
+      // 알림 컨테이너 생성
+      limitElement = createElement('div', {
+        id: 'translation-limit-exceeded',
+        innerHTML: `
+          <p><strong>번역 한도 초과!</strong></p>
+          <p>이번 달 번역 한도를 모두 사용했습니다.</p>
+          <p>더 많은 번역을 위해 구독 등급을 업그레이드하세요.</p>
+          <button id="upgrade-subscription">업그레이드</button>
+        `
+      }, {
         position: 'fixed',
         top: '20px',
         right: '20px',
@@ -174,28 +214,23 @@ const UIManager = (function() {
         maxWidth: '300px'
       });
       
-      // 한도 초과 메시지
-      limitElement.innerHTML = `
-        <p><strong>번역 한도 초과!</strong></p>
-        <p>이번 달 번역 한도를 모두 사용했습니다.</p>
-        <p>더 많은 번역을 위해 구독 등급을 업그레이드하세요.</p>
-        <button id="upgrade-subscription" style="
-          background: white;
-          color: #f44336;
-          border: none;
-          padding: 8px 15px;
-          margin-top: 10px;
-          border-radius: 3px;
-          cursor: pointer;
-          font-weight: bold;
-        ">업그레이드</button>
-      `;
-      
       document.body.appendChild(limitElement);
       
-      // 업그레이드 버튼 클릭 이벤트
+      // 업그레이드 버튼 스타일 설정 및 이벤트 등록
       const upgradeButton = document.getElementById('upgrade-subscription');
       if (upgradeButton) {
+        Object.assign(upgradeButton.style, {
+          background: 'white',
+          color: '#f44336',
+          border: 'none',
+          padding: '8px 15px',
+          marginTop: '10px',
+          borderRadius: '3px',
+          cursor: 'pointer',
+          fontWeight: 'bold'
+        });
+        
+        // 버튼 클릭 이벤트
         upgradeButton.addEventListener('click', () => {
           // 콜백 실행
           if (typeof onUpgradeClick === 'function') {
@@ -219,8 +254,6 @@ const UIManager = (function() {
           }, 500);
         }
       }, UI_SETTINGS.limitExceededTimeout);
-      
-      return limitElement;
     }
     
     return limitElement;
@@ -234,22 +267,22 @@ const UIManager = (function() {
     const { totalElements, translatedElements, totalTexts, translatedTexts, elapsedTime } = summary;
     
     // 요약 메시지 생성
-    let message = "번역 완료!";
+    let messageParts = ["번역 완료!"];
     
     if (totalElements && translatedElements) {
-      message += ` ${translatedElements}/${totalElements} 요소`;
+      messageParts.push(`${translatedElements}/${totalElements} 요소`);
     }
     
     if (totalTexts && translatedTexts) {
-      message += ` ${translatedTexts}/${totalTexts} 텍스트`;
+      messageParts.push(`${translatedTexts}/${totalTexts} 텍스트`);
     }
     
     if (elapsedTime) {
-      message += ` (${(elapsedTime / 1000).toFixed(1)}초)`;
+      messageParts.push(`(${(elapsedTime / 1000).toFixed(1)}초)`);
     }
     
     // 요약 표시
-    showTranslationStatus(message, true, true);
+    showTranslationStatus(messageParts.join(' '), true, true);
     
     // 상태 통계 초기화
     state.translationStats = {
@@ -266,12 +299,22 @@ const UIManager = (function() {
    * @param {Object} stats - 사용량 통계 객체
    */
   function updateUsageUI(stats) {
-    // 등급 표시
+    if (!stats) return;
+    
+    // 구독 등급 표시
     const subscriptionElement = document.getElementById('subscription-level');
     if (subscriptionElement) {
-      let subscriptionName = "무료";
-      if (stats.subscription === 'BASIC') subscriptionName = "기본 ($5/월)";
-      if (stats.subscription === 'PREMIUM') subscriptionName = "프리미엄 ($10/월)";
+      let subscriptionName = "";
+      
+      switch (stats.subscription) {
+        case 'BASIC':
+          subscriptionName = "기본 ($5/월)";
+          break;
+        case 'FREE':
+        default:
+          subscriptionName = "무료";
+          break;
+      }
       
       subscriptionElement.textContent = subscriptionName;
     }
@@ -279,78 +322,85 @@ const UIManager = (function() {
     // 프로그레스 바 업데이트
     const progressBar = document.getElementById('usage-progress');
     if (progressBar) {
-      if (stats.subscription === 'PREMIUM') {
+      if (stats.subscription === 'BASIC') {
         progressBar.style.width = '100%';
         progressBar.style.backgroundColor = '#4CAF50';
       } else {
         progressBar.style.width = `${stats.percentage}%`;
         
         // 경고 색상 (80% 이상이면 주황색, 95% 이상이면 빨간색)
-        if (stats.percentage >= 95) {
-          progressBar.style.backgroundColor = '#f44336';
-        } else if (stats.percentage >= 80) {
-          progressBar.style.backgroundColor = '#ff9800';
-        } else {
-          progressBar.style.backgroundColor = '#2196F3';
+        switch (true) {
+          case (stats.percentage >= 95):
+            progressBar.style.backgroundColor = '#f44336';
+            break;
+          case (stats.percentage >= 80):
+            progressBar.style.backgroundColor = '#ff9800';
+            break;
+          default:
+            progressBar.style.backgroundColor = '#2196F3';
+            break;
         }
       }
     }
     
+    // 사용량 및 남은 양 텍스트 업데이트
+    updateUsageTextElements(stats);
+    
+    // 다음 리셋 날짜 표시
+    updateResetDate(stats);
+  }
+  
+  /**
+   * 사용량 텍스트 요소들 업데이트
+   * @param {Object} stats - 사용량 통계 객체
+   */
+  function updateUsageTextElements(stats) {
     // 사용량 텍스트 업데이트
     const usageText = document.getElementById('usage-text');
     if (usageText) {
-      if (stats.subscription === 'PREMIUM') {
-        usageText.textContent = `무제한 사용 가능`;
-      } else {
-        usageText.textContent = `${stats.tokensUsed.toLocaleString()} / ${stats.limit.toLocaleString()} 토큰 사용`;
+      switch (stats.subscription) {
+        case 'BASIC':
+          usageText.textContent = '무제한 사용 가능';
+          break;
+        default:
+          usageText.textContent = `${stats.tokensUsed.toLocaleString()} / ${stats.limit.toLocaleString()} 토큰 사용`;
+          break;
       }
     }
     
     // 남은 양 업데이트
     const remainingText = document.getElementById('remaining-text');
     if (remainingText) {
-      if (stats.subscription === 'PREMIUM') {
-        remainingText.textContent = '무제한';
-      } else {
-        remainingText.textContent = `남은 토큰: ${stats.remaining.toLocaleString()}`;
+      switch (stats.subscription) {
+        case 'BASIC':
+          remainingText.textContent = '무제한';
+          break;
+        default:
+          remainingText.textContent = `남은 토큰: ${stats.remaining.toLocaleString()}`;
+          break;
       }
     }
     
-    // 다음 리셋 날짜 표시
+    // 업그레이드 버튼 텍스트 업데이트
+    const upgradeButton = document.getElementById('upgradeButton');
+    if (upgradeButton) {
+      upgradeButton.textContent = stats.subscription === 'FREE' ? '구독하기' : '구독 관리';
+    }
+  }
+  
+  /**
+   * 리셋 날짜 업데이트
+   * @param {Object} stats - 사용량 통계 객체
+   */
+  function updateResetDate(stats) {
     const resetText = document.getElementById('reset-date');
-    if (resetText) {
+    if (resetText && stats.lastReset) {
       const resetDate = new Date(stats.lastReset);
       resetDate.setMonth(resetDate.getMonth() + 1);
       
       const formattedDate = `${resetDate.getFullYear()}년 ${resetDate.getMonth() + 1}월 ${resetDate.getDate()}일`;
       resetText.textContent = `다음 리셋: ${formattedDate}`;
     }
-    
-    // 프리미엄 기능 상태 업데이트
-    updatePremiumFeaturesUI(stats.subscription === 'PREMIUM');
-  }
-  
-  /**
-   * 프리미엄 기능 UI 업데이트
-   * @param {boolean} isPremium - 프리미엄 사용자 여부
-   */
-  function updatePremiumFeaturesUI(isPremium) {
-    const translateImageCheckbox = document.getElementById('translateImage');
-    if (translateImageCheckbox) {
-      translateImageCheckbox.disabled = !isPremium;
-      
-      // 프리미엄 기능의 레이블에 disabled 클래스 추가/제거
-      const translateImageLabel = translateImageCheckbox.nextElementSibling;
-      if (translateImageLabel) {
-        if (isPremium) {
-          translateImageLabel.classList.remove('disabled-text');
-        } else {
-          translateImageLabel.classList.add('disabled-text');
-        }
-      }
-    }
-    
-    // 다른 프리미엄 기능들에 대한 UI 업데이트도 여기에 추가
   }
   
   /**
@@ -380,11 +430,29 @@ const UIManager = (function() {
     let toastElement = document.getElementById('toast-message');
     
     if (!toastElement) {
-      toastElement = document.createElement('div');
-      toastElement.id = 'toast-message';
+      // 배경색 결정
+      let backgroundColor;
+      switch (type) {
+        case 'success':
+          backgroundColor = '#4CAF50';
+          break;
+        case 'error':
+          backgroundColor = '#f44336';
+          break;
+        case 'warning':
+          backgroundColor = '#ff9800';
+          break;
+        case 'info':
+        default:
+          backgroundColor = '#2196F3';
+          break;
+      }
       
-      // 기본 스타일
-      Object.assign(toastElement.style, {
+      // 토스트 요소 생성
+      toastElement = createElement('div', {
+        id: 'toast-message',
+        textContent: message
+      }, {
         position: 'fixed',
         bottom: '10px',
         left: '50%',
@@ -396,30 +464,33 @@ const UIManager = (function() {
         fontFamily: 'Arial, sans-serif',
         boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
         zIndex: '10000',
-        transition: 'opacity 0.3s ease'
+        transition: 'opacity 0.3s ease',
+        background: backgroundColor
       });
       
       document.body.appendChild(toastElement);
+    } else {
+      // 기존 토스트 업데이트
+      toastElement.textContent = message;
+      
+      // 타입에 따른 색상 설정
+      switch (type) {
+        case 'success':
+          toastElement.style.background = '#4CAF50';
+          break;
+        case 'error':
+          toastElement.style.background = '#f44336';
+          break;
+        case 'warning':
+          toastElement.style.background = '#ff9800';
+          break;
+        case 'info':
+        default:
+          toastElement.style.background = '#2196F3';
+          break;
+      }
     }
     
-    // 메시지 유형에 따른 색상 설정
-    switch (type) {
-      case 'success':
-        toastElement.style.background = '#4CAF50';
-        break;
-      case 'error':
-        toastElement.style.background = '#f44336';
-        break;
-      case 'warning':
-        toastElement.style.background = '#ff9800';
-        break;
-      case 'info':
-      default:
-        toastElement.style.background = '#2196F3';
-        break;
-    }
-    
-    toastElement.textContent = message;
     toastElement.style.opacity = '1';
     
     // 기존 타이머 제거
@@ -446,6 +517,7 @@ const UIManager = (function() {
    * @param {Object} newSettings - 새 설정 값
    */
   function updateSettings(newSettings) {
+    if (!newSettings) return;
     Object.assign(UI_SETTINGS, newSettings);
   }
   
@@ -457,68 +529,95 @@ const UIManager = (function() {
     return {...UI_SETTINGS};
   }
   
-  // 이벤트 리스너 설정
+  /**
+   * 이벤트 리스너 설정
+   */
   function setupEventListeners() {
-    // popup.html에서 사용량 통계 로드 시 UI 업데이트
-    window.addEventListener('usage:updated', async (event) => {
-      if (document.querySelector('.subscription-info')) {
-        // 팝업 페이지인 경우
-        try {
-          const stats = await window.UsageManager.getUsageStats();
-          updateUsageUI(stats);
-        } catch (error) {
-          console.error("[번역 익스텐션] 사용량 UI 업데이트 오류:", error);
-        }
-      }
-    });
-    
-    // 한도 초과 이벤트 리스너
-    window.addEventListener('translation:limit-exceeded', () => {
-      showTranslationLimitExceeded(() => {
-        chrome.runtime.sendMessage({ action: "openPopup" });
-      });
-    });
-    
-    // 번역 완료 이벤트 리스너
-    window.addEventListener('translation:complete', (event) => {
-      const detail = event.detail;
-      if (detail && detail.summary) {
-        showTranslationSummary(detail.summary);
-      } else {
-        showTranslationStatus(`번역 완료!`, true, true);
-      }
-    });
-    
-    // 번역 상태 업데이트 이벤트 리스너
-    window.addEventListener('translation:progress', (event) => {
-      const detail = event.detail;
-      if (detail && detail.stats) {
-        updateTranslationProgress(detail.stats);
-      }
-    });
-    
-    // 텍스트 교체 이벤트 리스너
-    window.addEventListener('dom:text-replaced', (event) => {
-      const detail = event.detail;
-      if (detail && detail.count > 0) {
-        // 번역 통계 업데이트
-        state.translationStats.translatedTexts += detail.count;
-        updateTranslationProgress();
-      }
-    });
-  }
-  
-  // 초기화
-  function init() {
+    // DOM 로드 시에만 이벤트 리스너 설정
     if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', setupEventListeners);
+      document.addEventListener('DOMContentLoaded', initEventListeners);
     } else {
-      setupEventListeners();
+      initEventListeners();
     }
   }
   
+  /**
+   * 이벤트 리스너 초기화
+   */
+  function initEventListeners() {
+    // 이벤트 리스너 설정
+    const eventListeners = [
+      {
+        event: 'usage:updated',
+        handler: async () => {
+          if (document.querySelector('.subscription-info')) {
+            try {
+              // UsageManager 모듈이 있는 경우 사용
+              if (window.UsageManager && typeof window.UsageManager.getUsageStats === 'function') {
+                const stats = await window.UsageManager.getUsageStats();
+                updateUsageUI(stats);
+              }
+            } catch (error) {
+              console.error(`[${TonyConfig.APP_CONFIG.appName}] 사용량 UI 업데이트 오류:`, error);
+            }
+          }
+        }
+      },
+      {
+        event: 'usage:limit-exceeded',
+        handler: () => {
+          showTranslationLimitExceeded(() => {
+            // 확장 프로그램 컨텍스트가 유효한 경우 팝업 열기
+            if (TonyConfig.isExtensionContextValid()) {
+              chrome.runtime.sendMessage({ action: "openPopup" });
+            }
+          });
+        }
+      },
+      {
+        event: 'translation:complete',
+        handler: (event) => {
+          const detail = event.detail;
+          if (detail && detail.summary) {
+            showTranslationSummary(detail.summary);
+          } else {
+            showTranslationStatus("번역 완료!", true, true);
+          }
+        }
+      },
+      {
+        event: 'translation:progress',
+        handler: (event) => {
+          const detail = event.detail;
+          if (detail && detail.stats) {
+            updateTranslationProgress(detail.stats);
+          }
+        }
+      },
+      {
+        event: 'dom:text-replaced',
+        handler: (event) => {
+          const detail = event.detail;
+          if (detail && detail.count > 0) {
+            // 번역 통계 업데이트
+            state.translationStats.translatedTexts += detail.count;
+            updateTranslationProgress();
+          }
+        }
+      }
+    ];
+    
+    // 이벤트 리스너 등록
+    eventListeners.forEach(listener => {
+      window.addEventListener(
+        listener.event, 
+        TonyConfig.createSafeEventListener(listener.event, listener.handler)
+      );
+    });
+  }
+  
   // 초기화 실행
-  init();
+  setupEventListeners();
   
   // 공개 API
   return {
@@ -528,7 +627,6 @@ const UIManager = (function() {
     updateTranslationProgress,
     showTranslationSummary,
     updateUsageUI,
-    updatePremiumFeaturesUI,
     showSettingsSaved,
     showToast,
     updateSettings,

@@ -1,64 +1,43 @@
-// utils/usage-manager.js - 최적화된 버전
+// usage-manager.js - TonyConfig 활용 리팩토링 버전
 const UsageManager = (function() {
   'use strict';
   
-  // 초기화 플래그 확인
+  // 이미 초기화된 경우 중복 실행 방지
   if (window.usageManagerInitialized) {
-    console.log("[번역 익스텐션] UsageManager 이미 초기화됨");
+    console.log(`[${TonyConfig.APP_CONFIG.appName}] UsageManager 이미 초기화됨`);
     return window.UsageManager;
   }
   
   // 초기화 플래그 설정
   window.usageManagerInitialized = true;
 
-  // 회원 등급별 월간 토큰 한도
-  const SUBSCRIPTION_LIMITS = {
-    FREE: 15000,   // 무료 회원: 약 15,000 토큰 (약 30페이지)
-    BASIC: 100000  // 기본 회원($5): 약 100,000 토큰 (약 200페이지)
-  };
+  // 구독 등급별 월간 토큰 한도 (TonyConfig에서 가져옴)
+  const SUBSCRIPTION_LIMITS = TonyConfig.APP_CONFIG.subscriptionLimits;
 
   /**
-   * 현재 사용자 등급 가져오기
+   * 현재 사용자 구독 등급 가져오기
    * @returns {Promise<string>} - 구독 등급 (FREE, BASIC)
    */
   async function getCurrentSubscription() {
     try {
       return new Promise((resolve) => {
-        try {
-          chrome.storage.sync.get('subscription', (data) => {
-            try {
-              // 기본값은 무료 회원
-              const subscription = data && data.subscription ? data.subscription : 'FREE';
-              resolve(subscription);
-            } catch (error) {
-              console.error("[번역 익스텐션] 구독 정보 처리 오류:", error);
-              resolve('FREE'); // 오류 시 기본값 반환
-            }
-          });
-        } catch (chromeError) {
-          console.error("[번역 익스텐션] Chrome 스토리지 접근 오류:", chromeError);
-          resolve('FREE'); // 오류 시 기본값 반환
-        }
+        chrome.storage.sync.get('subscription', (data) => {
+          const subscription = data && data.subscription ? data.subscription : 'FREE';
+          
+          switch (subscription) {
+            case 'BASIC':
+              resolve('BASIC');
+              break;
+            case 'FREE':
+            default:
+              resolve('FREE');
+              break;
+          }
+        });
       });
     } catch (error) {
-      console.error("[번역 익스텐션] 구독 정보 가져오기 오류:", error);
-      return 'FREE'; // 오류 시 기본값 반환
-    }
-  }
-  
-  /**
-   * 현재 월 구하기 (yyyy-mm 형식)
-   * @returns {string} - 현재 월 (yyyy-mm)
-   */
-  function getCurrentMonth() {
-    try {
-      const date = new Date();
-      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-    } catch (error) {
-      console.error("[번역 익스텐션] 현재 월 계산 오류:", error);
-      // 오류 시 현재 날짜의 문자열 반환
-      const now = new Date();
-      return `${now.getFullYear()}-01`;
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 구독 정보 가져오기 오류:`, error);
+      return 'FREE'; // 오류 시 기본값
     }
   }
   
@@ -69,57 +48,35 @@ const UsageManager = (function() {
   async function getCurrentUsage() {
     try {
       return new Promise((resolve) => {
-        try {
-          chrome.storage.sync.get('usage', (data) => {
+        chrome.storage.sync.get('usage', (data) => {
+          const currentMonth = TonyConfig.getCurrentMonth();
+          
+          // 사용량 데이터가 없거나 이번 달 데이터가 아니면 초기화
+          if (!data || !data.usage || !data.usage.month || data.usage.month !== currentMonth) {
+            const newUsage = {
+              month: currentMonth,
+              tokensUsed: 0,
+              lastReset: new Date().toISOString()
+            };
+            
+            // 스토리지에 새 사용량 저장
             try {
-              // 사용량 데이터가 없으면 초기화
-              if (!data || !data.usage || !data.usage.month || data.usage.month !== getCurrentMonth()) {
-                const newUsage = {
-                  month: getCurrentMonth(),
-                  tokensUsed: 0,
-                  lastReset: new Date().toISOString()
-                };
-                
-                // storage 접근 오류 방지
-                try {
-                  chrome.storage.sync.set({ usage: newUsage }, () => {
-                    if (chrome.runtime.lastError) {
-                      console.warn("[번역 익스텐션] 사용량 저장 오류:", chrome.runtime.lastError);
-                    }
-                  });
-                } catch (storageError) {
-                  console.error("[번역 익스텐션] 스토리지 저장 오류:", storageError);
-                }
-                
-                resolve(newUsage);
-              } else {
-                resolve(data.usage);
-              }
-            } catch (dataError) {
-              console.error("[번역 익스텐션] 사용량 데이터 처리 오류:", dataError);
-              // 오류 시 기본값 반환
-              resolve({
-                month: getCurrentMonth(),
-                tokensUsed: 0,
-                lastReset: new Date().toISOString()
-              });
+              chrome.storage.sync.set({ usage: newUsage });
+            } catch (storageError) {
+              console.error(`[${TonyConfig.APP_CONFIG.appName}] 스토리지 저장 오류:`, storageError);
             }
-          });
-        } catch (chromeError) {
-          console.error("[번역 익스텐션] 스토리지 접근 오류:", chromeError);
-          // 오류 시 기본값 반환
-          resolve({
-            month: getCurrentMonth(),
-            tokensUsed: 0,
-            lastReset: new Date().toISOString()
-          });
-        }
+            
+            resolve(newUsage);
+          } else {
+            resolve(data.usage);
+          }
+        });
       });
     } catch (error) {
-      console.error("[번역 익스텐션] 사용량 가져오기 오류:", error);
-      // 오류 시 기본값 반환
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 사용량 가져오기 오류:`, error);
+      // 오류 시 기본값
       return {
-        month: getCurrentMonth(),
+        month: TonyConfig.getCurrentMonth(),
         tokensUsed: 0,
         lastReset: new Date().toISOString()
       };
@@ -133,15 +90,13 @@ const UsageManager = (function() {
    */
   async function recordUsage(tokens) {
     try {
-      // 토큰 수가 숫자가 아니면 기본값 사용
-      const tokenCount = typeof tokens === 'number' && !isNaN(tokens) ? tokens : 0;
-      if (tokenCount <= 0) {
-        console.warn("[번역 익스텐션] 유효하지 않은 토큰 수:", tokens);
-        return await getCurrentUsage(); // 기존 사용량 반환
+      // 유효한 토큰 수인지 확인
+      if (typeof tokens !== 'number' || isNaN(tokens) || tokens <= 0) {
+        return await getCurrentUsage();
       }
       
       const usage = await getCurrentUsage();
-      const newTokensUsed = usage.tokensUsed + tokenCount;
+      const newTokensUsed = usage.tokensUsed + tokens;
       
       // 새 사용량으로 업데이트
       const newUsage = {
@@ -150,37 +105,22 @@ const UsageManager = (function() {
       };
       
       return new Promise((resolve) => {
-        try {
-          chrome.storage.sync.set({ usage: newUsage }, () => {
-            // 크롬 런타임 에러 체크
-            if (chrome.runtime.lastError) {
-              console.warn("[번역 익스텐션] 사용량 저장 오류:", chrome.runtime.lastError);
-            }
-            
-            // 이벤트 발생 (사용량 업데이트)
-            try {
-              window.dispatchEvent(new CustomEvent('usage:updated', {
-                detail: { usage: newUsage }
-              }));
-            } catch (eventError) {
-              console.error("[번역 익스텐션] 이벤트 발생 오류:", eventError);
-            }
-            
-            resolve(newUsage);
-          });
-        } catch (storageError) {
-          console.error("[번역 익스텐션] 스토리지 저장 오류:", storageError);
-          resolve(usage); // 오류 시 기존 사용량 반환
-        }
+        chrome.storage.sync.set({ usage: newUsage }, () => {
+          // 이벤트 발생 (사용량 업데이트)
+          try {
+            TonyConfig.safeDispatchEvent('usage:updated', {
+              detail: { usage: newUsage }
+            });
+          } catch (eventError) {
+            console.error(`[${TonyConfig.APP_CONFIG.appName}] 이벤트 발생 오류:`, eventError);
+          }
+          
+          resolve(newUsage);
+        });
       });
     } catch (error) {
-      console.error("[번역 익스텐션] 사용량 기록 오류:", error);
-      // 오류 발생 시 기본 사용량 객체 반환
-      return {
-        month: getCurrentMonth(),
-        tokensUsed: 0,
-        lastReset: new Date().toISOString()
-      };
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 사용량 기록 오류:`, error);
+      return await getCurrentUsage();
     }
   }
   
@@ -191,7 +131,7 @@ const UsageManager = (function() {
    */
   async function canTranslate(estimatedTokens) {
     try {
-      // 토큰 수가 숫자가 아니면 기본값 사용
+      // 유효한 토큰 수인지 확인
       const tokenCount = typeof estimatedTokens === 'number' && !isNaN(estimatedTokens) ? estimatedTokens : 0;
       
       const subscription = await getCurrentSubscription();
@@ -205,20 +145,20 @@ const UsageManager = (function() {
       // 한도 초과 시 이벤트 발생
       if (!isWithinLimit) {
         try {
-          window.dispatchEvent(new CustomEvent('usage:limit-exceeded', {
+          TonyConfig.safeDispatchEvent('usage:limit-exceeded', {
             detail: { 
               required: tokenCount,
               available: Math.max(0, limit - usage.tokensUsed)
             }
-          }));
+          });
         } catch (eventError) {
-          console.error("[번역 익스텐션] 이벤트 발생 오류:", eventError);
+          console.error(`[${TonyConfig.APP_CONFIG.appName}] 이벤트 발생 오류:`, eventError);
         }
       }
       
       return isWithinLimit;
     } catch (error) {
-      console.error("[번역 익스텐션] 번역 가능 여부 확인 오류:", error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 번역 가능 여부 확인 오류:`, error);
       return true; // 오류 시 기본적으로 번역 허용
     }
   }
@@ -248,16 +188,16 @@ const UsageManager = (function() {
       
       // 이벤트 발생 (사용량 통계 준비됨)
       try {
-        window.dispatchEvent(new CustomEvent('usage:stats-ready', {
+        TonyConfig.safeDispatchEvent('usage:stats-ready', {
           detail: { stats }
-        }));
+        });
       } catch (eventError) {
-        console.error("[번역 익스텐션] 이벤트 발생 오류:", eventError);
+        console.error(`[${TonyConfig.APP_CONFIG.appName}] 이벤트 발생 오류:`, eventError);
       }
       
       return stats;
     } catch (error) {
-      console.error("[번역 익스텐션] 사용량 통계 가져오기 오류:", error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 사용량 통계 가져오기 오류:`, error);
       
       // 오류 시 기본 통계 반환
       return {
@@ -281,16 +221,15 @@ const UsageManager = (function() {
       // 영어 기준 1단어 = 약 1.3 토큰
       const tokenRatio = 1.3;
       
-      // 텍스트 배열이 아니면 빈 배열로 간주
+      // 텍스트 배열이 아니면 0 반환
       if (!Array.isArray(texts)) {
-        console.warn("[번역 익스텐션] 유효하지 않은 texts 배열:", texts);
         return 0;
       }
       
       // 모든 텍스트의 단어 수 계산
       const wordCount = texts.reduce((count, text) => {
         if (typeof text !== 'string') {
-          return count; // 문자열이 아닌 항목은 건너뜀
+          return count;
         }
         
         // 단어 수 추정 (공백으로 분리)
@@ -300,9 +239,9 @@ const UsageManager = (function() {
       // 토큰 수 추정 및 10% 버퍼 추가
       return Math.ceil(wordCount * tokenRatio * 1.1);
     } catch (error) {
-      console.error("[번역 익스텐션] 토큰 수 추정 오류:", error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 토큰 수 추정 오류:`, error);
       
-      // 최소한의 토큰 수 반환 (오류 방지)
+      // 최소한의 토큰 수 반환
       return texts && Array.isArray(texts) ? texts.length * 5 : 10;
     }
   }
@@ -316,38 +255,32 @@ const UsageManager = (function() {
     try {
       // 유효한 구독 등급인지 확인
       if (!SUBSCRIPTION_LIMITS.hasOwnProperty(level)) {
-        console.warn("[번역 익스텐션] 유효하지 않은 구독 등급:", level);
+        console.warn(`[${TonyConfig.APP_CONFIG.appName}] 유효하지 않은 구독 등급:`, level);
         return false;
       }
       
       return new Promise((resolve) => {
-        try {
-          chrome.storage.sync.set({ subscription: level }, () => {
-            // 크롬 런타임 에러 체크
-            if (chrome.runtime.lastError) {
-              console.warn("[번역 익스텐션] 구독 저장 오류:", chrome.runtime.lastError);
-              resolve(false);
-              return;
-            }
-            
-            // 이벤트 발생 (구독 업데이트)
-            try {
-              window.dispatchEvent(new CustomEvent('subscription:updated', {
-                detail: { subscription: level }
-              }));
-            } catch (eventError) {
-              console.error("[번역 익스텐션] 이벤트 발생 오류:", eventError);
-            }
-            
-            resolve(true);
-          });
-        } catch (storageError) {
-          console.error("[번역 익스텐션] 스토리지 저장 오류:", storageError);
-          resolve(false);
-        }
+        chrome.storage.sync.set({ subscription: level }, () => {
+          if (chrome.runtime.lastError) {
+            console.warn(`[${TonyConfig.APP_CONFIG.appName}] 구독 저장 오류:`, chrome.runtime.lastError);
+            resolve(false);
+            return;
+          }
+          
+          // 이벤트 발생 (구독 업데이트)
+          try {
+            TonyConfig.safeDispatchEvent('subscription:updated', {
+              detail: { subscription: level }
+            });
+          } catch (eventError) {
+            console.error(`[${TonyConfig.APP_CONFIG.appName}] 이벤트 발생 오류:`, eventError);
+          }
+          
+          resolve(true);
+        });
       });
     } catch (error) {
-      console.error("[번역 익스텐션] 구독 설정 오류:", error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 구독 설정 오류:`, error);
       return false;
     }
   }
@@ -359,7 +292,7 @@ const UsageManager = (function() {
   async function checkAndResetMonthlyUsage() {
     try {
       const usage = await getCurrentUsage();
-      const currentMonth = getCurrentMonth();
+      const currentMonth = TonyConfig.getCurrentMonth();
       
       // 현재 저장된 월과 현재 월이 다르면 리셋
       if (usage.month !== currentMonth) {
@@ -370,48 +303,32 @@ const UsageManager = (function() {
         };
         
         return new Promise((resolve) => {
-          try {
-            chrome.storage.sync.set({ usage: newUsage }, () => {
-              // 크롬 런타임 에러 체크
-              if (chrome.runtime.lastError) {
-                console.warn("[번역 익스텐션] 사용량 리셋 오류:", chrome.runtime.lastError);
-                resolve(false);
-                return;
-              }
-              
-              console.log('[번역 익스텐션] 월간 사용량 리셋 완료');
-              
-              // 이벤트 발생 (사용량 리셋)
-              try {
-                window.dispatchEvent(new CustomEvent('usage:reset', {
-                  detail: { usage: newUsage }
-                }));
-              } catch (eventError) {
-                console.error("[번역 익스텐션] 이벤트 발생 오류:", eventError);
-              }
-              
-              resolve(true);
-            });
-          } catch (storageError) {
-            console.error("[번역 익스텐션] 스토리지 저장 오류:", storageError);
-            resolve(false);
-          }
+          chrome.storage.sync.set({ usage: newUsage }, () => {
+            if (chrome.runtime.lastError) {
+              console.warn(`[${TonyConfig.APP_CONFIG.appName}] 사용량 리셋 오류:`, chrome.runtime.lastError);
+              resolve(false);
+              return;
+            }
+            
+            // 이벤트 발생 (사용량 리셋)
+            try {
+              TonyConfig.safeDispatchEvent('usage:reset', {
+                detail: { usage: newUsage }
+              });
+            } catch (eventError) {
+              console.error(`[${TonyConfig.APP_CONFIG.appName}] 이벤트 발생 오류:`, eventError);
+            }
+            
+            resolve(true);
+          });
         });
       }
       
       return false;
     } catch (error) {
-      console.error("[번역 익스텐션] 월별 사용량 리셋 체크 오류:", error);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 월별 사용량 리셋 체크 오류:`, error);
       return false;
     }
-  }
-  
-  /**
-   * 모든 구독 한도 가져오기
-   * @returns {Object} - 구독 한도 객체
-   */
-  function getLimits() {
-    return { ...SUBSCRIPTION_LIMITS };
   }
   
   /**
@@ -420,15 +337,12 @@ const UsageManager = (function() {
    * @returns {string} - 표시 이름
    */
   function getSubscriptionDisplayName(subscription) {
-    try {
-      switch (subscription) {
-        case 'BASIC': return "기본 ($5/월)";
-        case 'FREE':
-        default: return "무료";
-      }
-    } catch (error) {
-      console.error("[번역 익스텐션] 구독 표시 이름 변환 오류:", error);
-      return "무료"; // 기본값 반환
+    switch (subscription) {
+      case 'BASIC':
+        return "기본 ($5/월)";
+      case 'FREE':
+      default:
+        return "무료";
     }
   }
   
@@ -436,7 +350,7 @@ const UsageManager = (function() {
   try {
     getUsageStats();
   } catch (initError) {
-    console.error("[번역 익스텐션] 초기 사용량 캐싱 오류:", initError);
+    console.error(`[${TonyConfig.APP_CONFIG.appName}] 초기 사용량 캐싱 오류:`, initError);
   }
   
   // 공개 API
@@ -449,7 +363,6 @@ const UsageManager = (function() {
     estimateTokens,
     setSubscription,
     checkAndResetMonthlyUsage,
-    getLimits,
     getSubscriptionDisplayName
   };
 })();

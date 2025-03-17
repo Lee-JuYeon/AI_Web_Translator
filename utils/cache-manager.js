@@ -1,11 +1,19 @@
-// utils/cache-manager.js
+// cache-manager.js - TonyConfig 활용 리팩토링 버전
 const CacheManager = (function() {
   'use strict';
   
-  // 캐시 설정
+  // 이미 초기화된 경우 중복 실행 방지
+  if (window.cacheManagerInitialized) {
+    console.log(`[${TonyConfig.APP_CONFIG.appName}] CacheManager 이미 초기화됨`);
+    return window.CacheManager;
+  }
+  
+  // 초기화 플래그 설정
+  window.cacheManagerInitialized = true;
+  
+  // 캐시 설정 (TonyConfig에서 가져옴)
   const CACHE_SETTINGS = {
-    expiryDays: 30,   // 캐시 만료일 (일)
-    keyPrefix: 'translate_' // 캐시 키 접두사
+    ...TonyConfig.APP_CONFIG.cacheSettings
   };
   
   /**
@@ -32,10 +40,10 @@ const CacheManager = (function() {
         return null;
       }
       
-      console.log(`[번역 익스텐션] 캐시에서 번역 불러옴: ${text.substring(0, 20)}...`);
+      console.log(`[${TonyConfig.APP_CONFIG.appName}] 캐시에서 번역 불러옴: ${text.substring(0, 20)}...`);
       return data.translation;
     } catch (e) {
-      console.error("캐시 읽기 오류:", e);
+      console.error(`[${TonyConfig.APP_CONFIG.appName}] 캐시 읽기 오류:`, e);
       return null;
     }
   }
@@ -60,6 +68,7 @@ const CacheManager = (function() {
    * 캐시에서 번역 제거
    * @param {string} text - 원본 텍스트
    * @param {string} targetLang - 대상 언어 코드
+   * @returns {Promise<void>}
    */
   function remove(text, targetLang) {
     const key = _getCacheKey(text, targetLang);
@@ -123,7 +132,7 @@ const CacheManager = (function() {
         
         if (expiredKeys.length > 0) {
           chrome.storage.local.remove(expiredKeys, () => {
-            console.log(`[번역 익스텐션] ${expiredKeys.length}개의 만료된 캐시 항목 삭제`);
+            console.log(`[${TonyConfig.APP_CONFIG.appName}] ${expiredKeys.length}개의 만료된 캐시 항목 삭제됨`);
             resolve(expiredKeys.length);
           });
         } else {
@@ -138,6 +147,7 @@ const CacheManager = (function() {
    * @param {Object} newSettings - 새 설정 값
    */
   function updateSettings(newSettings) {
+    if (!newSettings) return;
     Object.assign(CACHE_SETTINGS, newSettings);
   }
   

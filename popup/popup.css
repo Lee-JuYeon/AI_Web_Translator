@@ -1,4 +1,4 @@
-/* popup/popup.css - 최적화된 버전 */
+/* popup.css - 리팩토링 버전 */
 body {
   font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
   margin: 0;
@@ -45,6 +45,19 @@ select {
   box-sizing: border-box;
   font-size: 14px;
   background-color: white;
+}
+
+/* 체크박스 스타일 */
+.checkbox-container {
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.checkbox-container input {
+  margin-right: 8px;
 }
 
 /* 사용량 표시 */
