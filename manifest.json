@@ -16,24 +16,26 @@
     "<all_urls>"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": [
+      "js": ["content-script.js"],
+      "type": "module"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
         "config.js",
-        "utils/cache-manager.js", 
-        "utils/usage-manager.js",
-        "utils/ui-manager.js",
-        "utils/dom/dom-selector.js",   
-        "utils/dom/dom-observer.js",     
-        "utils/dom/dom-manipulator.js",
-        "utils/batch/batch_engine.js",     
-        "utils/translator-service.js",
-        "utils/dom/dom-handler.js",        
-        "content-script.js"
-      ]
+        "utils/*.js",
+        "utils/dom/*.js",
+        "utils/batch/*.js",
+        "languages.json"
+      ],
+      "matches": ["<all_urls>"]
     }
   ],
   "action": {
