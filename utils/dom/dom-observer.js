@@ -1,11 +1,5 @@
-// dom-observer.js - ES Module 방식
-'use strict';
-
-import {
-  APP_CONFIG,
-  safeDispatchEvent,
-  createSafeEventListener
-} from '../../config.js';
+// dom-observer.js - ES 모듈 방식으로 리팩토링
+import { APP_CONFIG, safeDispatchEvent } from '../../config.js';
 
 // 기본 설정
 const DEFAULT_SETTINGS = {
@@ -28,19 +22,6 @@ const state = {
   isTranslating: false,
   isEnabled: true
 };
-
-try {
-  console.log(`[${APP_CONFIG.appName}] DOM Observer 모듈 로드 시작`);
-  
-  // 모듈 로드 시 진단 정보 출력
-  document.addEventListener('error', function(event) {
-    if (event.filename && event.filename.includes('dom-observer.js')) {
-      console.error(`[${APP_CONFIG.appName}] DOM Observer 모듈 오류:`, event.message);
-    }
-  });
-} catch (initError) {
-  console.error(`[${APP_CONFIG.appName}] DOM Observer 모듈 초기화 오류:`, initError);
-}
 
 /**
  * IntersectionObserver 초기화

@@ -1,10 +1,5 @@
-// dom-selector.js - ES Module 방식
-'use strict';
-
-import {
-  APP_CONFIG,
-  safeDispatchEvent
-} from '../../config.js';
+// dom-selector.js - ES 모듈 방식으로 리팩토링
+import { APP_CONFIG, safeDispatchEvent } from '../../config.js';
 
 // 기본 설정
 const DEFAULT_SETTINGS = {

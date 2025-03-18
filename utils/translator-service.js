@@ -1,10 +1,5 @@
-// translator-service.js - ES Module 방식 (전역변수 제거)
-'use strict';
-
-import {
-  APP_CONFIG,
-  safeDispatchEvent
-} from '../config.js';
+// translator-service.js - ES 모듈 방식으로 리팩토링
+import { APP_CONFIG, safeDispatchEvent } from '../config.js';
 
 // 기본 설정
 const DEFAULT_SETTINGS = {
