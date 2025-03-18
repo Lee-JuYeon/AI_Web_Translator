@@ -1,32 +1,41 @@
-// popup.js - 리팩토링 버전
-document.addEventListener('DOMContentLoaded', async function() {
-  try {
-    // 언어 목록 로드 및 UI 초기화
-    await initializePopup();
-  } catch (error) {
-    console.error("팝업 초기화 오류:", error);
-    showErrorMessage("팝업 초기화 중 오류가 발생했습니다.");
-  }
-});
+// popup.js - ES 모듈 방식으로 리팩토링
+import { APP_CONFIG, getCurrentMonth } from '../config.js';
+import * as CacheManager from '../utils/cache-manager.js';
+import * as UsageManager from '../utils/usage-manager.js';
+import * as UIManager from '../utils/ui-manager.js';
+
+// 모듈 스코프 상수
+const EXTERNAL_LINKS = {
+  'privacyLink': 'https://tony-translator.com/privacy',
+  'helpLink': 'https://tony-translator.com/help',
+  'subscriptionLink': 'https://tony-translator.com/subscription'
+};
 
 /**
- * 팝업 초기화 함수
+ * 팝업 초기화 메인 함수
  */
 async function initializePopup() {
-  // 언어 목록 로드
-  await loadLanguages();
-  
-  // 저장된 설정 로드
-  await loadSettings();
-  
-  // 사용량 통계 가져오기
-  const stats = await getUsageStats();
-  
-  // 사용량 UI 업데이트
-  updateUsageUI(stats);
-  
-  // 이벤트 리스너 설정
-  setupEventListeners();
+  try {
+    // 언어 목록 로드
+    await loadLanguages();
+    
+    // 저장된 설정 로드
+    await loadSettings();
+    
+    // 사용량 통계 가져오기
+    const stats = await getUsageStats();
+    
+    // 사용량 UI 업데이트
+    updateUsageUI(stats);
+    
+    // 이벤트 리스너 설정
+    setupEventListeners();
+    
+    console.log(`[${APP_CONFIG.appName}] 팝업 초기화 완료`);
+  } catch (error) {
+    console.error(`[${APP_CONFIG.appName}] 팝업 초기화 오류:`, error);
+    showErrorMessage("팝업 초기화 중 오류가 발생했습니다.");
+  }
 }
 
 /**
@@ -70,7 +79,7 @@ async function loadLanguages() {
     
     return languages;
   } catch (error) {
-    console.error("언어 목록 로드 오류:", error);
+    console.error(`[${APP_CONFIG.appName}] 언어 목록 로드 오류:`, error);
     
     // 오류 시 기본 언어 옵션 추가
     const targetLangSelect = document.getElementById('targetLang');
@@ -88,7 +97,10 @@ async function loadLanguages() {
 async function loadSettings() {
   return new Promise((resolve) => {
     chrome.storage.sync.get('settings', (data) => {
-      const settings = data.settings || { targetLang: navigator.language.split('-')[0], autoTranslate: false };
+      const settings = data.settings || { 
+        targetLang: navigator.language.split('-')[0], 
+        autoTranslate: false 
+      };
       
       // 번역 언어 설정
       const targetLangSelect = document.getElementById('targetLang');
@@ -118,9 +130,17 @@ async function loadSettings() {
  * 설정 저장 함수
  */
 function saveSettings() {
+  const targetLangSelect = document.getElementById('targetLang');
+  const autoTranslateCheckbox = document.getElementById('autoTranslate');
+  
+  if (!targetLangSelect || !autoTranslateCheckbox) {
+    console.error(`[${APP_CONFIG.appName}] 설정 요소를 찾을 수 없습니다.`);
+    return;
+  }
+  
   const settings = {
-    targetLang: document.getElementById('targetLang').value,
-    autoTranslate: document.getElementById('autoTranslate').checked
+    targetLang: targetLangSelect.value,
+    autoTranslate: autoTranslateCheckbox.checked
   };
   
   chrome.storage.sync.set({ settings }, () => {
@@ -131,10 +151,13 @@ function saveSettings() {
           action: "updateSettings", 
           settings: settings 
         }).catch(error => {
-          console.warn("탭에 메시지 전송 실패:", error);
+          console.warn(`[${APP_CONFIG.appName}] 탭에 메시지 전송 실패:`, error);
         });
       }
     });
+    
+    // 성공 메시지 표시 (선택적)
+    UIManager.showToast("설정이 저장되었습니다.", "success", 1500);
   });
 }
 
@@ -149,13 +172,16 @@ function setupEventListeners() {
   }
   
   // 설정 변경 이벤트
-  const settingControls = ['targetLang', 'autoTranslate'];
-  settingControls.forEach(controlId => {
-    const control = document.getElementById(controlId);
-    if (control) {
-      control.addEventListener('change', saveSettings);
-    }
-  });
+  const targetLangSelect = document.getElementById('targetLang');
+  const autoTranslateCheckbox = document.getElementById('autoTranslate');
+  
+  if (targetLangSelect) {
+    targetLangSelect.addEventListener('change', saveSettings);
+  }
+  
+  if (autoTranslateCheckbox) {
+    autoTranslateCheckbox.addEventListener('change', saveSettings);
+  }
   
   // 업그레이드 버튼
   const upgradeButton = document.getElementById('upgradeButton');
@@ -164,12 +190,7 @@ function setupEventListeners() {
   }
   
   // 링크 이벤트
-  const links = {
-    'privacyLink': 'https://tony-translator.com/privacy',
-    'helpLink': 'https://tony-translator.com/help'
-  };
-  
-  Object.entries(links).forEach(([id, url]) => {
+  Object.entries(EXTERNAL_LINKS).forEach(([id, url]) => {
     const link = document.getElementById(id);
     if (link) {
       link.addEventListener('click', (e) => {
@@ -188,7 +209,7 @@ function translateCurrentPage() {
     if (tabs && tabs[0] && tabs[0].id) {
       chrome.tabs.sendMessage(tabs[0].id, { action: "translatePage" })
         .catch(error => {
-          console.warn("번역 요청 전송 실패:", error);
+          console.warn(`[${APP_CONFIG.appName}] 번역 요청 전송 실패:`, error);
           // 콘텐츠 스크립트가 로드되지 않은 경우 처리
           injectContentScripts(tabs[0].id);
         });
@@ -206,7 +227,7 @@ function injectContentScripts(tabId) {
     action: "injectContentScripts", 
     tabId: tabId 
   }, (response) => {
-    console.log("콘텐츠 스크립트 로드 응답:", response);
+    console.log(`[${APP_CONFIG.appName}] 콘텐츠 스크립트 로드 응답:`, response);
   });
 }
 
@@ -214,7 +235,7 @@ function injectContentScripts(tabId) {
  * 구독 페이지 열기
  */
 function openSubscriptionPage() {
-  chrome.tabs.create({ url: 'https://tony-translator.com/subscription' });
+  chrome.tabs.create({ url: EXTERNAL_LINKS.subscriptionLink });
 }
 
 /**
@@ -222,12 +243,12 @@ function openSubscriptionPage() {
  */
 async function getUsageStats() {
   try {
-    // 모듈이 로드되었는지 확인
-    if (window.UsageManager && typeof window.UsageManager.getUsageStats === 'function') {
-      return await window.UsageManager.getUsageStats();
+    // UsageManager 모듈 사용
+    if (typeof UsageManager.getUsageStats === 'function') {
+      return await UsageManager.getUsageStats();
     }
     
-    // 모듈이 없으면 백그라운드 스크립트에 요청
+    // 백그라운드 스크립트에 요청
     return new Promise((resolve, reject) => {
       chrome.runtime.sendMessage({ action: "getUsageStats" }, (response) => {
         if (chrome.runtime.lastError) {
@@ -258,7 +279,7 @@ async function getUsageStats() {
       });
     });
   } catch (error) {
-    console.error("사용량 통계 가져오기 오류:", error);
+    console.error(`[${APP_CONFIG.appName}] 사용량 통계 가져오기 오류:`, error);
     return getDefaultStats();
   }
 }
@@ -294,6 +315,12 @@ function getSubscriptionLimit(subscription) {
  * 사용량 UI 업데이트
  */
 function updateUsageUI(stats) {
+  // UIManager 모듈 사용
+  if (typeof UIManager.updateUsageUI === 'function') {
+    UIManager.updateUsageUI(stats);
+    return;
+  }
+  
   // 구독 등급 표시
   const subscriptionElement = document.getElementById('subscription-level');
   if (subscriptionElement) {
@@ -362,3 +389,19 @@ function showErrorMessage(message) {
   
   container.appendChild(errorElement);
 }
+
+/**
+ * 팝업 모듈 API (다른 모듈에서 사용 가능)
+ */
+export const PopupAPI = {
+  initializePopup,
+  loadLanguages,
+  loadSettings,
+  saveSettings,
+  translateCurrentPage,
+  getUsageStats,
+  updateUsageUI
+};
+
+// DOM이 로드되면 초기화 실행
+document.addEventListener('DOMContentLoaded', initializePopup);

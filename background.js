@@ -1,12 +1,24 @@
-// background.js - ES Module 방식
+// background.js - ES 모듈 방식
 'use strict';
 
 import { 
   APP_CONFIG, 
   compareVersions, 
   getBrowserLanguage, 
-  getCurrentMonth 
+  getCurrentMonth,
+  safeDispatchEvent
 } from './config.js';
+
+// 필요한 모듈들 임포트
+import * as CacheManager from './utils/cache-manager.js';
+import * as UsageManager from './utils/usage-manager.js';
+import * as UIManager from './utils/ui-manager.js';
+import * as TranslatorService from './utils/translator-service.js';
+import * as DOMSelector from './utils/dom/dom-selector.js';
+import * as DOMObserver from './utils/dom/dom-observer.js';
+import * as DOMManipulator from './utils/dom/dom-manipulator.js';
+import * as DOMHandler from './utils/dom/dom-handler.js';
+import * as BatchEngine from './utils/batch/batch_engine.js';
 
 // 확장 프로그램 설치 및 업데이트 이벤트
 chrome.runtime.onInstalled.addListener(handleExtensionInstalled);
@@ -163,10 +175,228 @@ function handleMessage(message, sender, sendResponse) {
     case 'openPopup':
       chrome.action.openPopup();
       return false;
+    
+    // 콘텐츠 스크립트로부터 텍스트 노드 처리 요청 처리
+    case 'processTextNodes':
+      handleProcessTextNodesMessage(message.nodeInfoList, message.elements, sendResponse);
+      return true; // 비동기 응답
+      
+    // 설정 요청 처리
+    case 'getSettings':
+      handleGetSettingsMessage(sendResponse);
+      return true; // 비동기 응답
+      
+    // 텍스트 번역 요청 처리
+    case 'translateText':
+      handleTranslateTextMessage(message.text, message.options, sendResponse);
+      return true; // 비동기 응답
+      
+    // 배치 텍스트 번역 요청 처리
+    case 'translateTexts':
+      handleTranslateTextsMessage(message.texts, message.options, sendResponse);
+      return true; // 비동기 응답
+    
+    // 모듈 API 함수 호출 처리
+    case 'callModuleFunction':
+      handleModuleFunctionCall(message.module, message.function, message.params, sendResponse);
+      return true; // 비동기 응답
       
     default:
       console.warn(`[${APP_CONFIG.appName}] 알 수 없는 메시지: ${message.action}`);
       return false;
+  }
+}
+
+/**
+ * 텍스트 노드 처리 메시지 처리
+ * @param {Array} nodeInfoList - 텍스트 노드 정보 배열
+ * @param {Array} elements - 번역 대상 요소 배열
+ * @param {Function} sendResponse - 응답 함수
+ */
+async function handleProcessTextNodesMessage(nodeInfoList, elements, sendResponse) {
+  try {
+    // 입력 검증
+    if (!nodeInfoList || !Array.isArray(nodeInfoList) || nodeInfoList.length === 0) {
+      sendResponse({ success: false, error: "유효하지 않은 노드 정보 목록" });
+      return;
+    }
+    
+    // 텍스트 배열 추출
+    const textsToTranslate = nodeInfoList.map(item => item.text || "");
+    
+    // 사용량 확인 (제한 초과 시 오류 반환)
+    if (UsageManager) {
+      const estimatedTokens = UsageManager.estimateTokens(textsToTranslate);
+      const canTranslate = await UsageManager.canTranslate(estimatedTokens);
+      
+      if (!canTranslate) {
+        sendResponse({ 
+          success: false, 
+          error: "번역 한도 초과", 
+          limitExceeded: true 
+        });
+        return;
+      }
+    }
+    
+    // 배치 처리를 통한 번역
+    const translatedItems = await TranslatorService.translateInBatches(
+      textsToTranslate, 
+      APP_CONFIG.defaultSettings.batchSize, 
+      APP_CONFIG.defaultSettings.maxConcurrentBatches
+    );
+    
+    // 번역 결과가 없으면 오류
+    if (!translatedItems || !Array.isArray(translatedItems)) {
+      sendResponse({ success: false, error: "번역 결과가 없습니다" });
+      return;
+    }
+    
+    // 응답
+    sendResponse({
+      success: true,
+      results: translatedItems
+    });
+    
+    // 사용량 기록
+    if (UsageManager) {
+      const tokensUsed = UsageManager.estimateTokens(textsToTranslate);
+      await UsageManager.recordUsage(tokensUsed);
+    }
+  } catch (error) {
+    console.error(`[${APP_CONFIG.appName}] 텍스트 노드 처리 오류:`, error);
+    sendResponse({ success: false, error: error.message || "텍스트 노드 처리 오류" });
+  }
+}
+
+/**
+ * 설정 얻기 메시지 처리
+ * @param {Function} sendResponse - 응답 함수
+ */
+function handleGetSettingsMessage(sendResponse) {
+  chrome.storage.sync.get('settings', (data) => {
+    const defaultSettings = APP_CONFIG.defaultSettings;
+    const settings = data.settings || defaultSettings;
+    
+    sendResponse({
+      success: true,
+      settings: settings
+    });
+  });
+}
+
+/**
+ * 텍스트 번역 메시지 처리
+ * @param {string} text - 번역할 텍스트
+ * @param {Object} options - 번역 옵션
+ * @param {Function} sendResponse - 응답 함수
+ */
+async function handleTranslateTextMessage(text, options, sendResponse) {
+  try {
+    if (!text) {
+      sendResponse({ success: false, error: "번역할 텍스트가 없습니다" });
+      return;
+    }
+    
+    const translatedText = await TranslatorService.translateText(text, options);
+    
+    sendResponse({
+      success: true,
+      result: translatedText
+    });
+  } catch (error) {
+    console.error(`[${APP_CONFIG.appName}] 텍스트 번역 오류:`, error);
+    sendResponse({ success: false, error: error.message || "텍스트 번역 오류" });
+  }
+}
+
+/**
+ * 배치 텍스트 번역 메시지 처리
+ * @param {Array} texts - 번역할 텍스트 배열
+ * @param {Object} options - 번역 옵션
+ * @param {Function} sendResponse - 응답 함수
+ */
+async function handleTranslateTextsMessage(texts, options, sendResponse) {
+  try {
+    if (!texts || !Array.isArray(texts) || texts.length === 0) {
+      sendResponse({ success: false, error: "번역할 텍스트가 없습니다" });
+      return;
+    }
+    
+    const translatedTexts = await TranslatorService.translateTexts(texts, options);
+    
+    sendResponse({
+      success: true,
+      results: translatedTexts
+    });
+  } catch (error) {
+    console.error(`[${APP_CONFIG.appName}] 배치 텍스트 번역 오류:`, error);
+    sendResponse({ success: false, error: error.message || "배치 텍스트 번역 오류" });
+  }
+}
+
+/**
+ * 모듈 함수 호출 처리
+ * @param {string} moduleName - 모듈 이름
+ * @param {string} functionName - 함수 이름
+ * @param {Array} params - 함수 파라미터
+ * @param {Function} sendResponse - 응답 함수
+ */
+async function handleModuleFunctionCall(moduleName, functionName, params, sendResponse) {
+  try {
+    // 모듈 찾기
+    let targetModule;
+    
+    switch(moduleName) {
+      case 'CacheManager':
+        targetModule = CacheManager;
+        break;
+      case 'UsageManager':
+        targetModule = UsageManager;
+        break;
+      case 'UIManager':
+        targetModule = UIManager;
+        break;
+      case 'TranslatorService':
+        targetModule = TranslatorService;
+        break;
+      case 'DOMSelector':
+        targetModule = DOMSelector;
+        break;
+      case 'DOMObserver':
+        targetModule = DOMObserver;
+        break;
+      case 'DOMManipulator':
+        targetModule = DOMManipulator;
+        break;
+      case 'DOMHandler':
+        targetModule = DOMHandler;
+        break;
+      case 'BatchEngine':
+        targetModule = BatchEngine;
+        break;
+      default:
+        sendResponse({ success: false, error: `알 수 없는 모듈: ${moduleName}` });
+        return;
+    }
+    
+    // 함수 존재 확인
+    if (!targetModule || typeof targetModule[functionName] !== 'function') {
+      sendResponse({ success: false, error: `${moduleName} 모듈에 ${functionName} 함수가 없습니다` });
+      return;
+    }
+    
+    // 함수 실행
+    const result = await targetModule[functionName](...(params || []));
+    
+    // 응답
+    sendResponse({
+      success: true,
+      result: result
+    });
+  } catch (error) {
+    console.error(`[${APP_CONFIG.appName}] 모듈 함수 호출 오류:`, error);
+    sendResponse({ success: false, error: error.message || "모듈 함수 호출 오류" });
   }
 }
 
@@ -409,7 +639,7 @@ function checkAndResetMonthlyUsage() {
  * @param {number} tabId - 탭 ID
  */
 function loadContentScriptsAndTranslate(tabId) {
-  // 콘텐츠 스크립트만 로드 (모듈 방식으로 변경)
+  // 콘텐츠 스크립트만 로드
   chrome.scripting.executeScript({
     target: { tabId: tabId },
     files: ['content-script.js']

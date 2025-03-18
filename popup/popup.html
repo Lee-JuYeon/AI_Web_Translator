@@ -4,11 +4,8 @@
   <meta charset="UTF-8">
   <title>Tony번역</title>
   <link rel="stylesheet" href="popup.css">
-  <!-- 필수 모듈 로드 (순서 중요) -->
-  <script src="../utils/cache-manager.js"></script>
-  <script src="../utils/usage-manager.js"></script>
-  <script src="../utils/ui-manager.js"></script>
-  <script src="../utils/translator-service.js"></script>
+  <!-- ES 모듈 스크립트로 변경 -->
+  <script type="module" src="popup.js"></script>
 </head>
 <body>
   <div class="container">
@@ -57,8 +54,5 @@
       <p>버전 1.0 | <a href="#" id="privacyLink">개인정보처리방침</a> | <a href="#" id="helpLink">도움말</a></p>
     </div>
   </div>
-  
-  <!-- JS 파일은 마지막에 로드 -->
-  <script src="popup.js"></script>
 </body>
 </html>
